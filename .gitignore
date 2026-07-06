@@ -1,1 +1,8 @@
 venv
+.env
+runs/
+.tfcache/
+__pycache__/
+*.pyc
+.terraform/
+*.tfstate*
