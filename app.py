@@ -50,7 +50,7 @@ def get_graph():
 
 
 st.set_page_config(page_title="CloudForge", page_icon="⚒️", layout="wide")
-st.title("⚒️ CloudForge")
+st.title("CloudForge")
 st.caption(
     "Automated cloud application generation from natural-language prompts — "
     "symmetric app-code + Terraform generation with a bounded deployment "
@@ -89,8 +89,9 @@ with st.sidebar:
         st.success(f"LocalStack running at {LOCALSTACK_URL}", icon="🟢")
     else:
         st.error(
-            f"LocalStack not reachable at {LOCALSTACK_URL} — start it with "
-            "`localstack start -d`",
+            f"LocalStack not reachable at {LOCALSTACK_URL} — run `./start.sh` "
+            "from the project folder (or: `open -a Docker`, then "
+            "`docker start cloudforge-localstack`).",
             icon="🔴",
         )
 
