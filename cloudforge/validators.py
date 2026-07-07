@@ -34,6 +34,19 @@ def _tool(name: str) -> str:
     return str(candidate) if candidate.exists() else name
 
 
+def _checkov_bin() -> str:
+    """Checkov lives in its own venv: it depends on bc-python-hcl2 while
+    terraform-local depends on python-hcl2>=8, and both ship the same `hcl2`
+    module — they cannot coexist in one environment."""
+    override = os.environ.get("CHECKOV_BIN")
+    if override:
+        return override
+    isolated = REPO_ROOT / ".venv-checkov" / "bin" / "checkov"
+    if isolated.exists():
+        return str(isolated)
+    return _tool("checkov")
+
+
 def _aws_env() -> dict:
     env = os.environ.copy()
     env.update(
@@ -143,7 +156,7 @@ def run_terraform_validate(infra_dir: str, iteration: int) -> ValidationResult:
 def run_checkov(infra_dir: str, iteration: int, blocking: bool) -> ValidationResult:
     rc, out, dt = _run(
         [
-            _tool("checkov"),
+            _checkov_bin(),
             "-d",
             ".",
             "--framework",
@@ -178,7 +191,21 @@ def run_checkov(infra_dir: str, iteration: int, blocking: bool) -> ValidationRes
     except (json.JSONDecodeError, AttributeError, TypeError):
         pass  # keep raw output if the JSON shape is unexpected
 
-    gate_rc = 0 if (failed == 0 or (not blocking and rc != 127)) else rc
+    if failed is None and rc != 0:
+        # Checkov itself crashed (bad install, import error, timeout). That is
+        # an environment fault, not a generation fault — recording it as a
+        # failure would burn bounded correction iterations on an error no HCL
+        # change can fix. Record it as non-gating with the crash preserved.
+        return _result(
+            iteration,
+            "iac",
+            "checkov (tool error — not gated)",
+            0,
+            summary_text[:MAX_OUTPUT_CHARS],
+            dt,
+        )
+
+    gate_rc = 0 if (failed == 0 or not blocking) else (rc or 1)
     label = "checkov" if blocking else "checkov (advisory)"
     return _result(iteration, "iac", label, gate_rc, summary_text[:MAX_OUTPUT_CHARS], dt)
 

@@ -1,4 +1,5 @@
 venv
+.venv-checkov
 .env
 runs/
 .tfcache/

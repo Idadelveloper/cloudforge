@@ -1,9 +1,6 @@
 # ⚒️ CloudForge
 
-**Automated Cloud Application Generation from Natural Language Prompts Using
-Large Language Models** — INM373 final project artifact.
-
-CloudForge takes a single natural-language specification and *symmetrically*
+CloudForge takes a single natural-language specification and _symmetrically_
 generates both the application backend (Python Flask/FastAPI) and its
 Infrastructure as Code (Terraform), linked through a shared, bounded
 deployment feedback loop. It empirically tests whether providing functional
@@ -37,6 +34,14 @@ pip install -r requirements.txt
 
 cp .env.example .env        # add your ANTHROPIC_API_KEY
 
+# Checkov needs its own venv: it depends on bc-python-hcl2 while
+# terraform-local depends on python-hcl2>=8, and both provide the same
+# `hcl2` module, so they cannot share an environment.
+uv venv --python 3.13 .venv-checkov
+uv pip install --python .venv-checkov/bin/python checkov
+# (validators use .venv-checkov/bin/checkov automatically;
+#  override with CHECKOV_BIN=/path/to/checkov if needed)
+
 # prerequisites for phase 4
 brew install terraform      # or opentofu
 
@@ -52,9 +57,23 @@ docker run -d --name cloudforge-localstack -p 4566:4566 \
 
 ## Run
 
+One command — starts Docker Desktop and LocalStack if needed, then launches
+the app:
+
 ```bash
+./start.sh
+```
+
+Or manually:
+
+```bash
+open -a Docker                        # if the daemon isn't running
+docker start cloudforge-localstack    # the pinned LocalStack container
 venv/bin/streamlit run app.py
 ```
+
+> Do **not** use `localstack start -d` — the 2026 LocalStack CLI requires an
+> account and is not part of this setup.
 
 Enter a specification (three tiered examples are built in), watch each stage
 stream live, then inspect the plan, generated code, validation table,
