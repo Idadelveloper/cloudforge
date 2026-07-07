@@ -1,0 +1,301 @@
+# CloudForge evaluation benchmark — specification suite.
+#
+# 18 specifications across three complexity tiers (5 simple / 7 moderate /
+# 6 complex). Every spec is constrained to AWS services emulated by
+# LocalStack Community Edition (S3, DynamoDB, SQS, SNS, Lambda, API Gateway,
+# IAM, CloudWatch, Secrets Manager, KMS).
+#
+# `congruence_checklist` operationalises architectural congruence (RQ1):
+# after a run, each item is marked present/absent in the generated app code
+# and Terraform. Congruence score = items satisfied / items expected.
+# Checklists are defined BEFORE running the pipeline, so they measure the
+# spec's intent, not the output.
+
+specs:
+  # ------------------------- SIMPLE (single store, plain CRUD) ------------
+  - id: S1-notes
+    tier: simple
+    spec: >
+      Build a REST API for personal notes. Users can create, list, fetch,
+      update and delete notes. Each note has a title, body and timestamps.
+      Notes are stored in DynamoDB.
+    congruence_checklist:
+      - DynamoDB table for notes
+      - POST endpoint creating a note
+      - GET endpoint listing notes
+      - GET endpoint fetching a single note
+      - PUT/PATCH endpoint updating a note
+      - DELETE endpoint removing a note
+      - Note model has title, body and timestamps
+
+  - id: S2-todo
+    tier: simple
+    spec: >
+      Build a to-do list REST API. Users can add tasks, list tasks, mark a
+      task as completed, and delete tasks. Each task has a description, a
+      due date and a completed flag. Tasks are stored in DynamoDB.
+    congruence_checklist:
+      - DynamoDB table for tasks
+      - POST endpoint creating a task
+      - GET endpoint listing tasks
+      - Endpoint marking a task completed
+      - DELETE endpoint removing a task
+      - Task model has description, due date, completed flag
+
+  - id: S3-shortener
+    tier: simple
+    spec: >
+      Build a URL shortener API. Clients submit a long URL and receive a
+      short code; visiting the short code redirects to the original URL and
+      increments a visit counter. Include an endpoint returning the visit
+      statistics for a code. Mappings are stored in DynamoDB.
+    congruence_checklist:
+      - DynamoDB table for URL mappings
+      - POST endpoint creating a short code
+      - Redirect endpoint resolving a short code
+      - Visit counter incremented on redirect
+      - GET endpoint returning visit statistics
+
+  - id: S4-contact
+    tier: simple
+    spec: >
+      Build a contact-form backend. Visitors submit messages with a name,
+      email and message body; administrators can list all messages and
+      delete individual ones. Messages are stored in DynamoDB.
+    congruence_checklist:
+      - DynamoDB table for messages
+      - POST endpoint accepting a message
+      - GET endpoint listing messages
+      - DELETE endpoint removing a message
+      - Message model has name, email, body
+
+  - id: S5-inventory
+    tier: simple
+    spec: >
+      Build an inventory REST API for a small shop. Staff can add products,
+      list products, fetch one product, and adjust stock quantity up or
+      down. Each product has a name, SKU, price and quantity. Products are
+      stored in DynamoDB.
+    congruence_checklist:
+      - DynamoDB table for products
+      - POST endpoint creating a product
+      - GET endpoints listing and fetching products
+      - Endpoint adjusting stock quantity
+      - Product model has name, SKU, price, quantity
+
+  # -------------------- MODERATE (2-3 services or auth) -------------------
+  - id: M1-fileshare
+    tier: moderate
+    spec: >
+      Build a file-sharing backend. Clients can upload files to S3 via
+      presigned URLs, list their files, and delete them. File metadata
+      (owner, filename, size, upload time) is tracked in DynamoDB. Include
+      an endpoint that returns storage usage per owner.
+    congruence_checklist:
+      - S3 bucket for file storage
+      - DynamoDB table for file metadata
+      - Endpoint issuing presigned upload URLs
+      - GET endpoint listing a client's files
+      - DELETE endpoint removing a file
+      - Endpoint aggregating storage usage per owner
+
+  - id: M2-bookmarks
+    tier: moderate
+    spec: >
+      Build a bookmark manager API protected by an API key. The API key is
+      stored in AWS Secrets Manager, and every request must present it in a
+      header. Users can save bookmarks with a URL, title and tags, list
+      bookmarks filtered by tag, and delete bookmarks. Bookmarks are stored
+      in DynamoDB.
+    congruence_checklist:
+      - DynamoDB table for bookmarks
+      - Secrets Manager secret holding the API key
+      - Request authentication via API-key header
+      - POST endpoint saving a bookmark
+      - GET endpoint filtering bookmarks by tag
+      - DELETE endpoint removing a bookmark
+
+  - id: M3-gallery
+    tier: moderate
+    spec: >
+      Build an image-gallery backend. Images are stored in S3 and organised
+      into albums whose metadata lives in DynamoDB. Users can create albums,
+      upload images to an album via presigned URLs, list images in an album,
+      and delete images or whole albums.
+    congruence_checklist:
+      - S3 bucket for images
+      - DynamoDB table for album metadata
+      - POST endpoint creating an album
+      - Presigned upload flow for images
+      - GET endpoint listing images in an album
+      - DELETE endpoints for images and albums
+
+  - id: M4-registration
+    tier: moderate
+    spec: >
+      Build an event-registration service. Organisers create events with a
+      title, date and capacity; attendees register for an event until it is
+      full, after which registrations are rejected. Every successful
+      registration is also published to an SQS queue for downstream
+      processing. Events and registrations are stored in DynamoDB.
+    congruence_checklist:
+      - DynamoDB storage for events and registrations
+      - SQS queue receiving registration events
+      - POST endpoint creating an event
+      - POST endpoint registering an attendee
+      - Capacity limit enforced with rejection when full
+      - GET endpoint listing an event's registrations
+
+  - id: M5-expenses
+    tier: moderate
+    spec: >
+      Build an expense-tracking API. Users record expenses with an amount,
+      category and date, list expenses filtered by category or month, and
+      request a summary endpoint that returns total spend per category for
+      a given month. Expenses are stored in DynamoDB.
+    congruence_checklist:
+      - DynamoDB table for expenses
+      - POST endpoint recording an expense
+      - GET endpoint filtering by category and month
+      - Summary endpoint aggregating spend per category
+      - Expense model has amount, category, date
+
+  - id: M6-feedback
+    tier: moderate
+    spec: >
+      Build a product-feedback service. Customers submit feedback with a
+      rating from 1 to 5 and a comment. Feedback is stored in DynamoDB, and
+      any submission with a rating of 1 or 2 triggers a notification to an
+      SNS topic so support staff are alerted. Include endpoints to list
+      feedback and to show the average rating.
+    congruence_checklist:
+      - DynamoDB table for feedback
+      - SNS topic for low-rating alerts
+      - Notification triggered only for ratings 1-2
+      - POST endpoint submitting feedback
+      - GET endpoint listing feedback
+      - Endpoint computing the average rating
+
+  - id: M7-documents
+    tier: moderate
+    spec: >
+      Build a document-store backend. Documents are uploaded to a versioned
+      S3 bucket; their metadata (title, author, tags, version) is indexed
+      in DynamoDB. Users can upload new versions of a document, list
+      versions, search documents by tag, and download a specific version
+      via a presigned URL.
+    congruence_checklist:
+      - Versioned S3 bucket for documents
+      - DynamoDB table indexing document metadata
+      - Upload flow creating new versions
+      - GET endpoint listing a document's versions
+      - Search endpoint filtering by tag
+      - Presigned download of a specific version
+
+  # ------------- COMPLEX (3+ services, async workflows) -------------------
+  - id: C1-orders
+    tier: complex
+    spec: >
+      Build an order-processing service. A REST API accepts new orders and
+      writes them to DynamoDB, then publishes an event to an SQS queue for
+      asynchronous fulfilment. An SNS topic notifies subscribers when an
+      order status changes. Include endpoints to create orders, get order
+      status, and list orders by customer.
+    congruence_checklist:
+      - DynamoDB table for orders
+      - SQS queue for fulfilment events
+      - SNS topic for status-change notifications
+      - POST endpoint creating an order
+      - GET endpoint returning order status
+      - GET endpoint listing orders by customer
+
+  - id: C2-jobs
+    tier: complex
+    spec: >
+      Build an asynchronous job-processing service. Clients submit
+      compute jobs through a REST API; jobs are queued on SQS and processed
+      by a Lambda worker that writes results to DynamoDB. Clients can poll
+      a status endpoint and fetch results when a job completes. Failed jobs
+      are retried once and then routed to a dead-letter queue.
+    congruence_checklist:
+      - SQS queue for submitted jobs
+      - Lambda worker consuming the queue
+      - DynamoDB table for job status and results
+      - Dead-letter queue for failed jobs
+      - POST endpoint submitting a job
+      - GET endpoint polling job status
+      - GET endpoint fetching results
+
+  - id: C3-notifications
+    tier: complex
+    spec: >
+      Build a notification hub. Services publish events to a central SNS
+      topic; subscribers register through a REST API choosing a channel
+      (email-like or webhook-like), and each channel is backed by its own
+      SQS queue subscribed to the topic. Subscriptions are stored in
+      DynamoDB, and an endpoint reports how many messages each channel
+      queue has received.
+    congruence_checklist:
+      - Central SNS topic for events
+      - Per-channel SQS queues subscribed to the topic
+      - DynamoDB table for subscriptions
+      - POST endpoint registering a subscriber
+      - Publish endpoint pushing events to the topic
+      - Endpoint reporting per-channel message counts
+
+  - id: C4-blog
+    tier: complex
+    spec: >
+      Build a blog platform backend. Authors create posts with markdown
+      bodies stored in DynamoDB and images stored in S3. Readers can list
+      and read posts and submit comments. Comments are not published
+      immediately: they are placed on an SQS moderation queue, and an
+      approval endpoint pops them from moderation into the published
+      comments table.
+    congruence_checklist:
+      - DynamoDB storage for posts and comments
+      - S3 bucket for post images
+      - SQS moderation queue for new comments
+      - POST endpoint creating a post
+      - GET endpoints listing and reading posts
+      - Comment submission routed to moderation
+      - Approval endpoint publishing moderated comments
+
+  - id: C5-telemetry
+    tier: complex
+    spec: >
+      Build an IoT telemetry backend. Devices are registered in a DynamoDB
+      device registry. Devices post temperature readings to an ingest
+      endpoint that stores them in DynamoDB; any reading above a per-device
+      threshold publishes an alert to an SNS topic. Include endpoints to
+      register devices, set a device's threshold, and return the daily
+      minimum, maximum and average per device.
+    congruence_checklist:
+      - DynamoDB device registry
+      - DynamoDB storage for readings
+      - SNS topic for threshold alerts
+      - Alert fires only above the per-device threshold
+      - POST endpoint registering a device
+      - Endpoint setting a device threshold
+      - Ingest endpoint storing readings
+      - Endpoint returning daily min/max/average per device
+
+  - id: C6-loyalty
+    tier: complex
+    spec: >
+      Build a customer loyalty-points service. Customer accounts live in
+      DynamoDB. Purchases are submitted to a REST API with an idempotency
+      key and queued on SQS for asynchronous point accrual; processing the
+      same key twice must not double-award points. When a customer's
+      balance crosses 1000 points an SNS notification announces their
+      upgrade to gold tier. Every balance change is also appended to an
+      audit log in S3. Include endpoints to check balances and list a
+      customer's transactions.
+    congruence_checklist:
+      - DynamoDB table for accounts and transactions
+      - SQS queue for asynchronous accrual
+      - Idempotency-key deduplication of purchases
+      - SNS notification on crossing 1000 points
+      - S3 audit log of balance changes
+      - GET endpoint checking a balance
+      - GET endpoint listing a customer's transactions
