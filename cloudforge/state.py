@@ -28,6 +28,8 @@ class CloudForgeState(TypedDict, total=False):
     spec: str
     run_id: str
     run_dir: str
+    benchmark_id: str  # id from benchmark/specs.yaml ("" for ad-hoc specs)
+    tier: str  # simple | moderate | complex | ""
     max_iterations: int  # bounded self-correction (proposal O2: max 3)
     deploy_enabled: bool
     checkov_blocking: bool  # treat Checkov failures as gating vs advisory

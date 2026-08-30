@@ -249,7 +249,8 @@ def deploy(state: CloudForgeState) -> dict:
             "deploy_skipped": True,
             "deploy_output": (
                 f"LocalStack is not reachable at {validators.LOCALSTACK_URL}. "
-                "Start it with `localstack start -d` (or Docker) and rerun."
+                "Start it with `./start.sh` or `docker start cloudforge-localstack`, "
+                "then rerun."
             ),
             "events": ["⚠️ Deployment skipped — LocalStack is not running."],
         }

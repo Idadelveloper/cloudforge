@@ -68,6 +68,8 @@ def write_report(state: CloudForgeState, status: str) -> str:
         "model": MODEL,
         "status": status,
         "spec": state["spec"],
+        "benchmark_id": state.get("benchmark_id", ""),
+        "tier": state.get("tier", ""),
         "plan": state.get("plan"),
         "max_iterations": state.get("max_iterations"),
         "iterations_used": state.get("iteration", 0),

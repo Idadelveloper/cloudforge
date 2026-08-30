@@ -41,6 +41,8 @@ def analyse_run(report_path: Path) -> dict:
     iter0 = [v for v in validations if v["iteration"] == 0]
     return {
         "run_id": r["run_id"],
+        "benchmark_id": r.get("benchmark_id", ""),
+        "tier": r.get("tier", ""),
         "spec": r["spec"][:70].replace("\n", " "),
         # ---- intrinsic complexity dimensions (from the shared plan) ----
         "endpoints": len(plan.get("endpoints", [])),

@@ -1,101 +1,156 @@
-# ⚒️ CloudForge
+# CloudForge
 
-CloudForge takes a single natural-language specification and _symmetrically_
-generates both the application backend (Python Flask/FastAPI) and its
-Infrastructure as Code (Terraform), linked through a shared, bounded
-deployment feedback loop. It empirically tests whether providing functional
-application context to the LLM mitigates the **Correctness–Congruence Gap**
-(Nekrasov et al., 2025) and prevents **Temporal Blind Spot Failures**
-(Burton, 2026).
+CloudForge takes one natural-language specification and generates two linked
+artifacts in parallel: a Python backend and explicit Terraform. The pipeline is
+instrumented for dissertation evaluation, not just demo output, so every run
+records validation, deployment, timing, and usage data under `runs/<run_id>/`.
 
-## Pipeline (LangGraph explicit cyclic state machine)
+## What the pipeline does
 
-1. **Prompt parsing & parallel generation** — the spec is parsed into a shared
-   structured plan, then routed to two parallel Claude generation nodes: one
-   produces the Python backend, the other Terraform.
-2. **Automated validation** — app code: flake8, pytest, Bandit; Terraform:
-   `terraform validate`, Checkov.
-3. **Conditional self-correction** — failing tool logs are fed back to the
-   generation nodes alongside the original spec, bounded to **3 iterations**.
-4. **Deployment verification** — validated Terraform is deployed to
-   [LocalStack](https://localstack.cloud) via `tflocal`, catching semantic and
-   runtime failures static linters miss. Deploy errors also feed the loop.
+1. Parse the specification into a shared structured plan.
+2. Generate application code and Terraform in parallel.
+3. Validate both sides with automated tools.
+4. Feed failing tool output back into a bounded correction loop.
+5. Optionally deploy the validated Terraform to LocalStack for a runtime check.
 
-Every run writes `runs/<run_id>/` with the generated `app/` and `infra/`
-directories plus `report.json` (validation results per iteration, token
-usage/cost, timings, and first-pass failure-taxonomy tags) — the raw data for
-the 15–25-spec benchmark and error-taxonomy analysis.
+The bounded loop is capped at `3` correction iterations, and deployment errors
+feed back into the same loop when phase 4 is enabled.
+
+## Verified stack
+
+These pins were refreshed against upstream package indexes and vendor
+documentation on **August 30, 2026**:
+
+| Component | Version |
+|---|---|
+| Anthropic Python SDK | `1.1.0` |
+| LangGraph | `1.2.11` |
+| Streamlit | `1.62.0` |
+| Flask | `3.1.3` |
+| FastAPI | `0.141.1` |
+| Pydantic | `2.13.5` |
+| pytest | `9.1.1` |
+| flake8 | `7.3.0` |
+| Bandit | `1.9.4` |
+| Checkov | `3.3.15` |
+| terraform-local (`tflocal`) | `0.26.0` |
+| LocalStack image | `localstack/localstack:4.6` |
+
+## Prerequisites
+
+- Python `3.13`
+- Docker Desktop
+- Terraform CLI or OpenTofu on `PATH`
+- An Anthropic API key in `.env`
+
+Python `3.13` is the recommended project interpreter because it was the
+cleanest reproducible path for the repository checks and the isolated Checkov
+setup verified locally on August 30, 2026.
+
+Local validation for this refresh was performed with Python `3.13.15`,
+Terraform `1.15.8`, and Docker `29.5.3` on August 30, 2026.
 
 ## Setup
 
+Create the main environment:
+
 ```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-
-cp .env.example .env        # add your ANTHROPIC_API_KEY
-
-# Checkov needs its own venv: it depends on bc-python-hcl2 while
-# terraform-local depends on python-hcl2>=8, and both provide the same
-# `hcl2` module, so they cannot share an environment.
-uv venv --python 3.13 .venv-checkov
-uv pip install --python .venv-checkov/bin/python checkov
-# (validators use .venv-checkov/bin/checkov automatically;
-#  override with CHECKOV_BIN=/path/to/checkov if needed)
-
-# prerequisites for phase 4
-brew install terraform      # or opentofu
-
-# LocalStack: run the pinned community image directly via Docker.
-# (The 2026 LocalStack CLI requires an account; the 4.x community image
-# does not, which also keeps the research setup reproducible.)
-open -a Docker              # make sure the Docker daemon is running
-docker run -d --name cloudforge-localstack -p 4566:4566 \
-  -v /var/run/docker.sock:/var/run/docker.sock localstack/localstack:4.6
-
-# later: docker start cloudforge-localstack / docker stop cloudforge-localstack
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-## Run
+Create the isolated Checkov environment:
 
-One command — starts Docker Desktop and LocalStack if needed, then launches
-the app:
+```bash
+python3.13 -m venv .venv-checkov
+.venv-checkov/bin/python -m pip install --upgrade pip
+.venv-checkov/bin/python -m pip install -r requirements-checkov.txt
+```
+
+Checkov is isolated on purpose. `terraform-local` depends on `python-hcl2`,
+while Checkov depends on `bc-python-hcl2`, and both expose the `hcl2` module.
+Keeping them in separate virtual environments avoids import collisions.
+
+Add your API key:
+
+```bash
+cp .env.example .env
+```
+
+Then set `ANTHROPIC_API_KEY` inside `.env`.
+
+Create the LocalStack container once:
+
+```bash
+open -a Docker
+docker run -d --name cloudforge-localstack -p 4566:4566 \
+  -v /var/run/docker.sock:/var/run/docker.sock localstack/localstack:4.6
+```
+
+After that, reuse it with `docker start cloudforge-localstack` and stop it with
+`docker stop cloudforge-localstack`.
+
+> Do not use `localstack start -d`. The current LocalStack CLI flow is account
+> oriented, while this project is pinned to a direct Docker-based Community
+> image setup for reproducible local evaluation.
+
+## Run the app
+
+The easiest path is:
 
 ```bash
 ./start.sh
 ```
 
-Or manually:
+That script checks Docker, starts the pinned LocalStack container if needed,
+and launches Streamlit.
+
+Manual launch:
 
 ```bash
-open -a Docker                        # if the daemon isn't running
-docker start cloudforge-localstack    # the pinned LocalStack container
-venv/bin/streamlit run app.py
+open -a Docker
+docker start cloudforge-localstack
+.venv/bin/streamlit run app.py
 ```
 
-> Do **not** use `localstack start -d` — the 2026 LocalStack CLI requires an
-> account and is not part of this setup.
+## Test the repository
 
-Enter a specification (three tiered examples are built in), watch each stage
-stream live, then inspect the plan, generated code, validation table,
-deployment log, and cost metrics.
+Run the repository checks from the project root:
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/flake8 app.py cloudforge scripts tests --max-line-length 120
+.venv/bin/python -m compileall app.py cloudforge scripts tests
+```
+
+For dissertation evaluation runs:
+
+1. Start with a benchmark spec and set `max_iterations = 0` for the zero-shot baseline.
+2. Rerun the same spec with `max_iterations = 3` for the bounded correction condition.
+3. Record whether validation passes, whether LocalStack deployment passes, and how the generated app and Terraform match the benchmark checklist.
+4. Use `.venv/bin/python scripts/complexity_metrics.py` to summarise completed run folders.
 
 ## Project layout
 
-```
-app.py                  Streamlit interface
+```text
+app.py                  Streamlit interface and evaluation controls
+benchmark/specs.yaml    Pre-registered benchmark suite
 cloudforge/
-  state.py              Typed LangGraph state (reducers for parallel fan-in)
-  prompts.py            Few-shot / CoT prompt templates + output schemas
-  llm.py                Claude API wrapper (streaming, structured outputs,
-                        adaptive thinking, prompt caching, cost accounting)
-  validators.py         flake8 / pytest / Bandit / terraform / Checkov / tflocal
-  nodes.py              Pipeline nodes (4 phases + bounded correction)
-  graph.py              StateGraph wiring
-  report.py             report.json writer + failure-taxonomy auto-tagging
-runs/                   Per-run artifacts (gitignored)
+  graph.py              LangGraph wiring
+  llm.py                Claude SDK wrapper and cost accounting
+  nodes.py              Pipeline stages and routing
+  prompts.py            Prompt templates and JSON schemas
+  report.py             report.json writer and failure tagging
+  state.py              Shared typed state
+  validators.py         Validation and deployment tool wrappers
+scripts/
+  complexity_metrics.py Run-summary helper
+tests/                  Repository-level tests
+runs/                   Generated artifacts and reports
 ```
 
-> ⚠️ **Experimental research artifact.** Generated outputs regularly pass
-> automated checks while diverging from user intent. All deployments target
-> the sandboxed LocalStack emulator only; never apply generated Terraform to
-> a real AWS account without review.
+CloudForge is an experimental research artifact. Generated output can pass
+automated checks and still diverge from user intent, so keep all deployments
+inside LocalStack unless you have manually reviewed the result.

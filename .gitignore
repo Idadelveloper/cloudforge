@@ -1,9 +1,14 @@
 venv
+.venv
 .venv-checkov
 .env
 runs/
 .tfcache/
 __pycache__/
+.idea/
+.pytest_cache/
+firebase-debug.log
 *.pyc
 .terraform/
 *.tfstate*
+dissertation/

@@ -5,6 +5,20 @@ cd "$(dirname "$0")"
 
 CONTAINER=cloudforge-localstack
 IMAGE=localstack/localstack:4.6
+ENV_DIR=
+
+if [ -x ".venv/bin/streamlit" ]; then
+    ENV_DIR=.venv
+elif [ -x "venv/bin/streamlit" ]; then
+    ENV_DIR=venv
+else
+    echo "✗ Missing project virtual environment."
+    echo "  Create it with:"
+    echo "  python3.13 -m venv .venv"
+    echo "  source .venv/bin/activate"
+    echo "  python -m pip install -r requirements.txt"
+    exit 1
+fi
 
 # 1. Docker daemon
 if ! docker info >/dev/null 2>&1; then
@@ -44,4 +58,4 @@ fi
 
 # 3. CloudForge
 echo "▶ Launching CloudForge…"
-exec venv/bin/streamlit run app.py
+exec "$ENV_DIR/bin/streamlit" run app.py

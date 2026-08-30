@@ -1,9 +1,10 @@
 # CloudForge evaluation benchmark — specification suite.
 #
 # 18 specifications across three complexity tiers (5 simple / 7 moderate /
-# 6 complex). Every spec is constrained to AWS services emulated by
-# LocalStack Community Edition (S3, DynamoDB, SQS, SNS, Lambda, API Gateway,
-# IAM, CloudWatch, Secrets Manager, KMS).
+# 6 complex). Every spec is constrained to the AWS services explicitly allowed
+# by the current pipeline prompts and deployed through LocalStack Community
+# Edition (S3, DynamoDB, SQS, SNS, Lambda, API Gateway, IAM, CloudWatch,
+# Secrets Manager).
 #
 # `congruence_checklist` operationalises architectural congruence (RQ1):
 # after a run, each item is marked present/absent in the generated app code
