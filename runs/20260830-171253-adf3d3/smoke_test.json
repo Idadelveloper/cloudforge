@@ -1,0 +1,64 @@
+{
+  "run_id": "20260830-171253-adf3d3",
+  "probed_at": "2026-08-31T01:07:28.268190+00:00",
+  "localstack_url": "http://localhost:4566",
+  "apis_found": 1,
+  "results": [
+    {
+      "api_id": "k3pceixoeb",
+      "stage": "prod",
+      "method": "GET",
+      "path": "/health",
+      "probe_path": "/health",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "api_id": "k3pceixoeb",
+      "stage": "prod",
+      "method": "POST",
+      "path": "/notes",
+      "probe_path": "/notes",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "api_id": "k3pceixoeb",
+      "stage": "prod",
+      "method": "GET",
+      "path": "/notes",
+      "probe_path": "/notes",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "api_id": "k3pceixoeb",
+      "stage": "prod",
+      "method": "GET",
+      "path": "/notes/{note_id}",
+      "probe_path": "/notes/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "api_id": "k3pceixoeb",
+      "stage": "prod",
+      "method": "PUT",
+      "path": "/notes/{note_id}",
+      "probe_path": "/notes/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "api_id": "k3pceixoeb",
+      "stage": "prod",
+      "method": "DELETE",
+      "path": "/notes/{note_id}",
+      "probe_path": "/notes/smoke-id",
+      "status": "404",
+      "serving": true
+    }
+  ],
+  "serving_endpoints": 6,
+  "total_endpoints": 6
+}

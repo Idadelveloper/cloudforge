@@ -1,0 +1,292 @@
+{
+  "run_id": "20260830-171253-adf3d3",
+  "timestamp": "2026-08-31T00:17:54.351068+00:00",
+  "model": "claude-opus-5",
+  "status": "success",
+  "spec": "Build a REST API for personal notes. Users can create, list, fetch, update and delete notes. Each note has a title, body and timestamps. Notes are stored in DynamoDB.",
+  "benchmark_id": "S1-notes",
+  "tier": "simple",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "0034f9d46126cadc8aed47d7d6344262d905266926fe7211dd18c1db5d72f79b",
+    "complexity": {
+      "cloud_components": 1,
+      "aws_service_types": 1,
+      "api_operations": 5,
+      "domain_entities": 1,
+      "workflow_rules": 0,
+      "score": 7,
+      "rationale": "Single DynamoDB-backed entity with ordinary CRUD only."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for notes",
+      "POST endpoint creating a note",
+      "GET endpoint listing notes",
+      "GET endpoint fetching a single note",
+      "PUT/PATCH endpoint updating a note",
+      "DELETE endpoint removing a note",
+      "Note model has title, body and timestamps"
+    ]
+  },
+  "repository": {
+    "commit": "940351a725382dd323ba80aab99ecd21d87abe1a",
+    "dirty": true
+  },
+  "plan": {
+    "app_name": "personal_notes_api",
+    "summary": "A REST API for managing personal notes. Authenticated-by-header users can create, list, fetch, update and delete notes; each note carries a title, body and created/updated timestamps. Notes persist in a single DynamoDB table keyed by user and note id. Deployed as a FastAPI application running in Lambda behind API Gateway, with IAM roles and CloudWatch logging.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe returning service status; used by deployment checks and monitoring."
+      },
+      {
+        "method": "POST",
+        "path": "/notes",
+        "purpose": "Create a new note from a JSON body containing title and body; generates note id and created_at/updated_at timestamps."
+      },
+      {
+        "method": "GET",
+        "path": "/notes",
+        "purpose": "List the caller's notes with optional pagination (limit, next_token) via a DynamoDB query on the partition key."
+      },
+      {
+        "method": "GET",
+        "path": "/notes/{note_id}",
+        "purpose": "Fetch a single note by id; 404 if it does not exist for the caller."
+      },
+      {
+        "method": "PUT",
+        "path": "/notes/{note_id}",
+        "purpose": "Update the title and/or body of an existing note and refresh updated_at."
+      },
+      {
+        "method": "DELETE",
+        "path": "/notes/{note_id}",
+        "purpose": "Delete a note by id; returns 204 on success, 404 if absent."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Note",
+        "fields": [
+          "user_id: string (partition key, defaults to 'default-user' when no auth header supplied)",
+          "note_id: string (sort key, UUID4 generated server-side)",
+          "title: string (1-200 chars, required)",
+          "body: string (0-10000 chars, required)",
+          "created_at: string (ISO-8601 UTC timestamp)",
+          "updated_at: string (ISO-8601 UTC timestamp)"
+        ]
+      },
+      {
+        "name": "NoteCreateRequest",
+        "fields": [
+          "title: string (required)",
+          "body: string (required)"
+        ]
+      },
+      {
+        "name": "NoteUpdateRequest",
+        "fields": [
+          "title: string (optional)",
+          "body: string (optional)"
+        ]
+      },
+      {
+        "name": "NoteListResponse",
+        "fields": [
+          "items: list[Note]",
+          "next_token: string | null",
+          "count: integer"
+        ]
+      },
+      {
+        "name": "ErrorResponse",
+        "fields": [
+          "detail: string",
+          "code: string"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "notes-table",
+        "justification": "Spec states notes are stored in DynamoDB; table with partition key user_id and sort key note_id supports all five CRUD operations plus per-user listing."
+      },
+      {
+        "service": "Lambda",
+        "name": "notes-api-function",
+        "justification": "Hosts the FastAPI application (via an ASGI adapter) so the REST API runs serverlessly without managing servers."
+      },
+      {
+        "service": "API Gateway",
+        "name": "notes-api-gateway",
+        "justification": "Provides the public HTTP entry point and proxies all /notes and /health routes to the Lambda function."
+      },
+      {
+        "service": "IAM",
+        "name": "notes-api-lambda-role",
+        "justification": "Execution role for the Lambda granting least-privilege DynamoDB GetItem/PutItem/UpdateItem/DeleteItem/Query on the notes table plus CloudWatch Logs write access."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "notes-api-log-group",
+        "justification": "Log group for Lambda request/error logs so CRUD failures and latency can be diagnosed."
+      }
+    ],
+    "assumptions": [
+      "No authentication mechanism was specified; the API reads an optional X-User-Id header to scope notes per user and falls back to 'default-user', keeping the data model multi-tenant-ready without adding Cognito (unavailable in LocalStack Community).",
+      "'Personal notes' implies per-user isolation, so user_id is the DynamoDB partition key and every read/write is scoped to the caller's id.",
+      "Timestamps are server-generated ISO-8601 UTC strings; clients cannot set them.",
+      "DynamoDB billing mode is PAY_PER_REQUEST since no throughput requirements were given.",
+      "Listing returns newest-first is not required by the spec; results are returned in DynamoDB sort-key order with a default page size of 25 and a max of 100.",
+      "PUT is treated as a partial update (only supplied fields change) because the spec says 'update' without describing full replacement semantics.",
+      "No file attachments, search, sharing, notifications or async processing were requested, so S3, SQS, SNS and Secrets Manager are intentionally omitted."
+    ]
+  },
+  "max_iterations": 3,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_region.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.archive_file.lambda will be read during apply\n  # (depends on a resource or a module with changes pending)\n <= data \"archive_file\" \"lambda\" {\n      + id                  = (known after apply)\n      + output_base64sha256 = (known after apply)\n      + output_base64sha512 = (known after apply)\n      + output_md5          = (known after apply)\n      + output_path         = \"./build/notes_api_function.zip\"\n      + output_sha          = (known after apply)\n      + output_sha256       = (known after apply)\n      + output_sha512       = (known after apply)\n      + output_size         = (known after apply)\n      + source_file         = \"./build/handler.py\"\n      + type                = \"zip\"\n    }\n\n  # aws_api_gateway_deployment.notes will be created\n  + resource \"aws_api_gateway_deployment\" \"notes\" {\n      + created_date  = (known after apply)\n      + execution_arn = (known after apply)\n      + id            = (known after apply)\n      + invoke_url    = (known after apply)\n      + rest_api_id   = (known after apply)\n      + triggers      = (known after apply)\n    }\n\n  # aws_api_gateway_integration.proxy will be created\n  + resource \"aws_api_gateway_integration\" \"proxy\" {\n      + cache_namespace         = (known after apply)\n      + connection_type         = \"INTERNET\"\n      + http_method             = \"ANY\"\n      + id                      = (known after apply)\n      + integration_http_method = \"POST\"\n      + passthrough_behavior    = (known after apply)\n      + resource_id             = (known after apply)\n      + rest_api_id             = (known after apply)\n      + timeout_milliseconds    = 29000\n      + type                    = \"AWS_PROXY\"\n      + uri                     = (known after apply)\n    }\n\n  # aws_api_gateway_integration.root will be created\n  + resource \"aws_api_gateway_integration\" \"root\" {\n      + cache_namespace         = (known after apply)\n      + connection_type         = \"INTERNET\"\n      + http_method             = \"ANY\"\n      + id                      = (known after apply)\n      + integration_http_method = \"POST\"\n      + passthrough_behavior    = (known after apply)\n      + resource_id             = (known after apply)\n      + rest_api_id             = (known after apply)\n      + timeout_milliseconds    = 29000\n      + type                    = \"AWS_PROXY\"\n      + uri                     = (known after apply)\n    }\n\n  # aws_api_gateway_method.proxy will be created\n  + resource \"aws_api_gateway_method\" \"proxy\" {\n      + api_key_required   = false\n      + authorization      = \"NONE\"\n      + http_method        = \"ANY\"\n      + id                 = (known after apply)\n      + request_parameters = {\n          + \"method.request.path.proxy\" = true\n        }\n      + resource_id        = (known after apply)\n      + rest_api_id        = (known after apply)\n    }\n\n  # aws_api_gateway_method.root will be created\n  + resource \"aws_api_gateway_method\" \"root\" {\n      + api_key_required = false\n      + authorization    = \"NONE\"\n      + http_method      = \"ANY\"\n      + id               = (known after apply)\n      + resource_id      = (known after apply)\n      + rest_api_id      = (known after apply)\n    }\n\n  # aws_api_gateway_method_settings.notes will be created\n  + resource \"aws_api_gateway_method_settings\" \"notes\" {\n      + id          = (known after apply)\n      + method_path = \"*/*\"\n      + rest_api_id = (known after apply)\n      + stage_name  = \"prod\"\n\n      + settings {\n          + cache_data_encrypted                       = (known after apply)\n          + cache_ttl_in_seconds                       = (known after apply)\n          + caching_enabled                            = false\n          + data_trace_enabled                         = (known after apply)\n          + logging_level                              = \"INFO\"\n          + metrics_enabled                            = true\n          + require_authorization_for_cache_control    = (known after apply)\n          + throttling_burst_limit                     = -1\n          + throttling_rate_limit                      = -1\n          + unauthorized_cache_control_header_strategy = (known after apply)\n        }\n    }\n\n  # aws_api_gateway_resource.proxy will be created\n  + resource \"aws_api_gateway_resource\" \"proxy\" {\n      + id          = (known after apply)\n      + parent_id   = (known after apply)\n      + path        = (known after apply)\n      + path_part   = \"{proxy+}\"\n      + rest_api_id = (known after apply)\n    }\n\n  # aws_api_gateway_rest_api.notes will be created\n  + resource \"aws_api_gateway_rest_api\" \"notes\" {\n      + api_key_source               = (known after apply)\n      + arn                          = (known after apply)\n      + binary_media_types           = (known after apply)\n      + created_date                 = (known after apply)\n      + description                  = \"REST entry point for the personal notes API\"\n      + disable_execute_api_endpoint = (known after apply)\n      + execution_arn                = (known after apply)\n      + id                           = (known after apply)\n      + minimum_compression_size     = (known after apply)\n      + name                         = \"notes-api-gateway\"\n      + policy                       = (known after apply)\n      + root_resource_id             = (known after apply)\n      + tags                         = {\n          + \"Name\" = \"notes-api-gateway\"\n        }\n      + tags_all                     = {\n          + \"Name\"       = \"notes-api-gateway\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"personal"
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.32
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "..........................                                               [100%]\n=============================== warnings summary ===============================\nruns/20260830-171253-adf3d3/app/tests/test_app.py::test_create_note_validation_error\nruns/20260830-171253-adf3d3/app/tests/test_app.py::test_create_note_missing_body_field\nruns/20260830-171253-adf3d3/app/tests/test_app.py::test_list_notes_limit_out_of_range\nruns/20260830-171253-adf3d3/app/tests/test_app.py::test_list_notes_limit_out_of_range\n  /Users/idadelphine/Desktop/personal/school/cloudforge/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py:59: StarletteDeprecationWarning: 'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead.\n    response = await handler(conn, exc)  # type: ignore[arg-type]\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n26 passed, 4 warnings in 0.21s",
+      "duration_s": 0.76
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.49
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 15.69
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 38 passed, 0 failed.",
+      "duration_s": 3.1
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_region.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.archive_file.lambda will be read during apply\n  # (depends on a resource or a module with changes pending)\n <= data \"archive_file\" \"lambda\" {\n      + id                  = (known after apply)\n      + output_base64sha256 = (known after apply)\n      + output_base64sha512 = (known after apply)\n      + output_md5          = (known after apply)\n      + output_path         = \"./build/notes_api_function.zip\"\n      + output_sha          = (known after apply)\n      + output_sha256       = (known after apply)\n      + output_sha512       = (known after apply)\n      + output_size         = (known after apply)\n      + source_file         = \"./build/handler.py\"\n      + type                = \"zip\"\n    }\n\n  # aws_api_gateway_deployment.notes will be created\n  + resource \"aws_api_gateway_deployment\" \"notes\" {\n      + created_date  = (known after apply)\n      + execution_arn = (known after apply)\n      + id            = (known after apply)\n      + invoke_url    = (known after apply)\n      + rest_api_id   = (known after apply)\n      + triggers      = (known after apply)\n    }\n\n  # aws_api_gateway_integration.proxy will be created\n  + resource \"aws_api_gateway_integration\" \"proxy\" {\n      + cache_namespace         = (known after apply)\n      + connection_type         = \"INTERNET\"\n      + http_method             = \"ANY\"\n      + id                      = (known after apply)\n      + integration_http_method = \"POST\"\n      + passthrough_behavior    = (known after apply)\n      + resource_id             = (known after apply)\n      + rest_api_id             = (known after apply)\n      + timeout_milliseconds    = 29000\n      + type                    = \"AWS_PROXY\"\n      + uri                     = (known after apply)\n    }\n\n  # aws_api_gateway_integration.root will be created\n  + resource \"aws_api_gateway_integration\" \"root\" {\n      + cache_namespace         = (known after apply)\n      + connection_type         = \"INTERNET\"\n      + http_method             = \"ANY\"\n      + id                      = (known after apply)\n      + integration_http_method = \"POST\"\n      + passthrough_behavior    = (known after apply)\n      + resource_id             = (known after apply)\n      + rest_api_id             = (known after apply)\n      + timeout_milliseconds    = 29000\n      + type                    = \"AWS_PROXY\"\n      + uri                     = (known after apply)\n    }\n\n  # aws_api_gateway_method.proxy will be created\n  + resource \"aws_api_gateway_method\" \"proxy\" {\n      + api_key_required   = false\n      + authorization      = \"NONE\"\n      + http_method        = \"ANY\"\n      + id                 = (known after apply)\n      + request_parameters = {\n          + \"method.request.path.proxy\" = true\n        }\n      + resource_id        = (known after apply)\n      + rest_api_id        = (known after apply)\n    }\n\n  # aws_api_gateway_method.root will be created\n  + resource \"aws_api_gateway_method\" \"root\" {\n      + api_key_required = false\n      + authorization    = \"NONE\"\n      + http_method      = \"ANY\"\n      + id               = (known after apply)\n      + resource_id      = (known after apply)\n      + rest_api_id      = (known after apply)\n    }\n\n  # aws_api_gateway_method_settings.notes will be created\n  + resource \"aws_api_gateway_method_settings\" \"notes\" {\n      + id          = (known after apply)\n      + method_path = \"*/*\"\n      + rest_api_id = (known after apply)\n      + stage_name  = \"prod\"\n\n      + settings {\n          + cache_data_encrypted                       = (known after apply)\n          + cache_ttl_in_seconds                       = (known after apply)\n          + caching_enabled                            = false\n          + data_trace_enabled                         = (known after apply)\n          + logging_level                              = \"INFO\"\n          + metrics_enabled                            = true\n          + require_authorization_for_cache_control    = (known after apply)\n          + throttling_burst_limit                     = -1\n          + throttling_rate_limit                      = -1\n          + unauthorized_cache_control_header_strategy = (known after apply)\n        }\n    }\n\n  # aws_api_gateway_resource.proxy will be created\n  + resource \"aws_api_gateway_resource\" \"proxy\" {\n      + id          = (known after apply)\n      + parent_id   = (known after apply)\n      + path        = (known after apply)\n      + path_part   = \"{proxy+}\"\n      + rest_api_id = (known after apply)\n    }\n\n  # aws_api_gateway_rest_api.notes will be created\n  + resource \"aws_api_gateway_rest_api\" \"notes\" {\n      + api_key_source               = (known after apply)\n      + arn                          = (known after apply)\n      + binary_media_types           = (known after apply)\n      + created_date                 = (known after apply)\n      + description                  = \"REST entry point for the personal notes API\"\n      + disable_execute_api_endpoint = (known after apply)\n      + execution_arn                = (known after apply)\n      + id                           = (known after apply)\n      + minimum_compression_size     = (known after apply)\n      + name                         = \"notes-api-gateway\"\n      + policy                       = (known after apply)\n      + root_resource_id             = (known after apply)\n      + tags                         = {\n          + \"Name\" = \"notes-api-gateway\"\n        }\n      + tags_all                     = {\n          + \"Name\"       = \"notes-api-gateway\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"personal",
+      "duration_s": 32.71
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 77,
+      "output_tokens": 1475,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1165
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 1859,
+      "output_tokens": 24864,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 1858,
+      "output_tokens": 22535,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.2605,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 20.6
+    },
+    {
+      "node": "generate_app",
+      "seconds": 223.4
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 229.1
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.6
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 18.8
+    },
+    {
+      "node": "deploy",
+      "seconds": 32.7
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 personal_notes_api (fastapi); AWS resources: DynamoDB:notes-table, Lambda:notes-api-function, API Gateway:notes-api-gateway, IAM:notes-api-lambda-role, CloudWatch:notes-api-log-group",
+    "\ud83d\udc0d Generated application code (initial): 6 files \u2014 FastAPI notes API with a decoupled storage layer. `storage.py` defines a `NotesRepository` interface, a DynamoDB implementation (boto3 resource honouring `AWS_ENDPOINT_URL` and defaulting to us-east-1/`notes-table`, conditional writes mapped to `NoteNotFoundError`, opaque base64 pagination tokens) and an in-memory implementation. `app.py` wires the six planned endpoints (`/health`, CRUD on `/notes`) with pydantic models, per-user scoping via the optional `X-User-Id` header (fallback `default-user`), server-generated ISO-8601 timestamps, partial PUT semantics, 204 delete, and uniform `{detail, code}` error bodies. Tests use `fastapi.testclient.TestClient` with dependency-overridden in-memory repo plus a fake boto3 table/resource for the DynamoDB path \u2014 fully offline, no network. requirements.txt lists only fastapi, uvicorn, boto3, pydantic; README documents config and run/test commands.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for personal_notes_api mapping 1:1 to the plan's aws_resources.\n\nFiles: versions.tf (terraform block, hashicorp/aws ~> 5.0 plus archive/local for inline Lambda packaging), variables.tf (defaults notes-table, notes-api-function, notes-api-gateway, notes-api-lambda-role, /aws/lambda/notes-api-function), main.tf, outputs.tf.\n\nResources:\n- DynamoDB notes-table: PAY_PER_REQUEST, hash key user_id, range key note_id, SSE with a customer managed KMS CMK, point-in-time recovery enabled.\n- Lambda notes-api-function: Python handler written by local_file and zipped by the archive_file data source (no pre-built artifact needed). It implements /health and full CRUD on /notes via boto3 against the table, honouring X-User-Id with a default-user fallback, 25/100 page sizes, base64 next_token pagination, partial PUT updates and 404/422 error bodies ({detail, code}). Hardened with reserved concurrency, CMK-encrypted env vars and active tracing.\n- API Gateway notes-api-gateway: REGIONAL REST API with root ANY and {proxy+} ANY AWS_PROXY integrations, lambda invoke permission, deployment with redeployment trigger and create_before_destroy, stage with X-Ray tracing plus JSON access logging, and method settings with INFO logging/metrics.\n- IAM notes-api-lambda-role: assume-role for lambda.amazonaws.com and one least-privilege policy \u2014 DynamoDB GetItem/PutItem/UpdateItem/DeleteItem/Query on the table ARN (+/index/*), kms use on the single CMK, logs:CreateLogStream/PutLogEvents on the function log group only. No wildcard actions or resources.\n- CloudWatch: Lambda log group (plan's notes-api-log-group) and an API Gateway access log group, both 365-day retention and CMK encrypted.\n- KMS CMK with rotation and a scoped key policy is included solely to satisfy the encryption-at-rest checks for DynamoDB, Lambda env vars and log groups (KMS is available in LocalStack Community).\n\nProvider has default_tags with project and managed-by. Checks that are impossible under LocalStack Community or contradict the spec (Lambda VPC/DLQ/code signing, API auth, WAF, mTLS, API caching) carry inline checkov:skip comments with justifications; no RDS/ECS/EKS/ElastiCache is used.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

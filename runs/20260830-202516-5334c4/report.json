@@ -1,0 +1,300 @@
+{
+  "run_id": "20260830-202516-5334c4",
+  "timestamp": "2026-08-31T03:30:41.022205+00:00",
+  "started_at": "2026-08-31T03:25:16.244864+00:00",
+  "finished_at": "2026-08-31T03:30:41.022205+00:00",
+  "wall_seconds": 324.8,
+  "node_seconds_sum": 566.9,
+  "model": "claude-opus-5",
+  "status": "success",
+  "spec": "Build a REST API for personal notes. Users can create, list, fetch, update and delete notes. Each note has a title, body and timestamps. Notes are stored in DynamoDB.",
+  "benchmark_id": "S1-notes",
+  "tier": "simple",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "0034f9d46126cadc8aed47d7d6344262d905266926fe7211dd18c1db5d72f79b",
+    "complexity": {
+      "cloud_components": 1,
+      "aws_service_types": 1,
+      "api_operations": 5,
+      "domain_entities": 1,
+      "workflow_rules": 0,
+      "score": 7,
+      "rationale": "Single DynamoDB-backed entity with ordinary CRUD only."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for notes",
+      "POST endpoint creating a note",
+      "GET endpoint listing notes",
+      "GET endpoint fetching a single note",
+      "PUT/PATCH endpoint updating a note",
+      "DELETE endpoint removing a note",
+      "Note model has title, body and timestamps"
+    ]
+  },
+  "repository": {
+    "commit": "1aaa565e17b05b89e2f9d575136d22d335d373e2",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "personal_notes_api",
+    "summary": "A REST API for managing personal notes. Clients (a web/mobile front-end or direct HTTP consumers) can create, list, fetch, update and delete notes. Each note carries a client-supplied title and body plus server-generated identifier and created/updated timestamps. Notes are persisted in a single DynamoDB table keyed by note id and scoped to an owner. The service is implemented with FastAPI and deployed as a Lambda function fronted by API Gateway, with structured logs in CloudWatch.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe returning service status; used by deployment smoke tests."
+      },
+      {
+        "method": "POST",
+        "path": "/notes",
+        "purpose": "Create a new note from a JSON body containing title and body; returns the stored note with generated id and timestamps (201)."
+      },
+      {
+        "method": "GET",
+        "path": "/notes",
+        "purpose": "List notes for the current owner with optional pagination (limit, next_token) returning items plus next page token."
+      },
+      {
+        "method": "GET",
+        "path": "/notes/{note_id}",
+        "purpose": "Fetch a single note by id; 404 if it does not exist."
+      },
+      {
+        "method": "PUT",
+        "path": "/notes/{note_id}",
+        "purpose": "Replace/update the title and body of an existing note and refresh updated_at; 404 if it does not exist."
+      },
+      {
+        "method": "DELETE",
+        "path": "/notes/{note_id}",
+        "purpose": "Delete a note by id; returns 204 on success, 404 if it does not exist."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Note",
+        "fields": [
+          "note_id: str (uuid4, partition-key component, server generated)",
+          "owner_id: str (partition key, defaults to 'default-user')",
+          "title: str (1-200 chars, required)",
+          "body: str (0-20000 chars, required)",
+          "created_at: str (ISO-8601 UTC timestamp, server generated)",
+          "updated_at: str (ISO-8601 UTC timestamp, server generated)"
+        ]
+      },
+      {
+        "name": "NoteCreateRequest",
+        "fields": [
+          "title: str (required, 1-200 chars)",
+          "body: str (required, max 20000 chars)"
+        ]
+      },
+      {
+        "name": "NoteUpdateRequest",
+        "fields": [
+          "title: str (required, 1-200 chars)",
+          "body: str (required, max 20000 chars)"
+        ]
+      },
+      {
+        "name": "NoteListResponse",
+        "fields": [
+          "items: list[Note]",
+          "count: int",
+          "next_token: str | None"
+        ]
+      },
+      {
+        "name": "ErrorResponse",
+        "fields": [
+          "detail: str",
+          "code: str"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "notes-table",
+        "justification": "Spec explicitly requires notes stored in DynamoDB; single table with partition key owner_id and sort key note_id backs all five CRUD endpoints and the owner-scoped list query."
+      },
+      {
+        "service": "Lambda",
+        "name": "notes-api-fn",
+        "justification": "Hosts the FastAPI application (via an ASGI adapter) as the serverless compute that executes the CRUD handlers."
+      },
+      {
+        "service": "API Gateway",
+        "name": "notes-api-gateway",
+        "justification": "Exposes the REST endpoints (/notes, /notes/{note_id}, /health) publicly over HTTP and proxies all requests to the Lambda function."
+      },
+      {
+        "service": "IAM",
+        "name": "notes-api-lambda-role",
+        "justification": "Execution role for the Lambda with a least-privilege policy granting GetItem/PutItem/UpdateItem/DeleteItem/Query on the notes table plus CloudWatch Logs write permissions, and the resource policy allowing API Gateway to invoke the function."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "notes-api-log-group",
+        "justification": "Log group for Lambda request/error logging so CRUD failures and validation errors are observable."
+      }
+    ],
+    "assumptions": [
+      "No authentication mechanism was specified; the API is treated as single-tenant and all notes are written under a constant owner_id of 'default-user', with the owner partition key left in place so per-user auth can be added later without a data migration.",
+      "'Personal notes' implies a JSON REST API with no HTML UI, so FastAPI with Pydantic request/response models was chosen.",
+      "Timestamps are server-generated ISO-8601 UTC strings (created_at set on create, updated_at set on create and every update); clients cannot supply them.",
+      "Note ids are server-generated UUID4 strings rather than client-supplied keys.",
+      "PUT is treated as a full replacement of title and body on an existing note (no upsert of unknown ids, no PATCH endpoint).",
+      "GET /notes uses a DynamoDB Query on the owner partition with a default page size of 25 (max 100) and an opaque next_token cursor, rather than an unbounded scan.",
+      "DynamoDB table uses PAY_PER_REQUEST billing since no throughput figures were given; no GSIs are needed for the described access patterns.",
+      "No file attachments, search, sharing, notifications or async processing were mentioned, so S3, SQS, SNS and Secrets Manager are deliberately omitted.",
+      "Deployment target is LocalStack Community Edition, so the Lambda is packaged as a zip artifact and API Gateway uses an AWS_PROXY integration with a stage named 'dev'."
+    ]
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_iam_policy_document.lambda_assume_role: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Reading...\ndata.aws_iam_policy_document.apigw_assume_role: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.apigw_assume_role: Read complete after 0s [id=269069340]\ndata.aws_iam_policy_document.lambda_assume_role: Read complete after 0s [id=666922913]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.archive_file.lambda will be read during apply\n  # (depends on a resource or a module with changes pending)\n <= data \"archive_file\" \"lambda\" {\n      + id                  = (known after apply)\n      + output_base64sha256 = (known after apply)\n      + output_base64sha512 = (known after apply)\n      + output_md5          = (known after apply)\n      + output_path         = \"./build/notes-api-fn.zip\"\n      + output_sha          = (known after apply)\n      + output_sha256       = (known after apply)\n      + output_sha512       = (known after apply)\n      + output_size         = (known after apply)\n      + source_file         = \"./build/handler.py\"\n      + type                = \"zip\"\n    }\n\n  # data.aws_iam_policy_document.apigw_logs will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"apigw_logs\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogGroup\",\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogGroups\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:FilterLogEvents\",\n              + \"logs:GetLogEvents\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + \"arn:aws:logs:us-east-1:000000000000:log-group:/aws/apigateway/*\",\n              + \"arn:aws:logs:us-east-1:000000000000:log-group:/aws/apigateway/*:*\",\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApiGatewayAccessLogging\"\n        }\n    }\n\n  # data.aws_iam_policy_document.lambda_permissions will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"lambda_permissions\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"NotesTableCrud\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"LambdaLogging\"\n        }\n      + statement {\n          + actions   = [\n              + \"xray:PutTelemetryRecords\",\n              + \"xray:PutTraceSegments\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + \"*\",\n            ]\n          + sid       = \"LambdaTracing\"\n        }\n    }\n\n  # aws_api_gateway_account.this will be created\n  + resource \"aws_api_gateway_account\" \"this\" {\n      + api_key_version     = (known after apply)\n      + cloudwatch_role_arn = (known after apply)\n      + features            = (known after apply)\n      + id                  = (known after apply)\n      + throttle_settings   = (known after apply)\n    }\n\n  # aws_api_gateway_deployment.notes will be created\n  + resource \"aws_api_gateway_deployment\" \"notes\" {\n      + created_date  = (known after apply)\n      + execution_arn = (known after apply)\n      + id            = (known after apply)\n      + invoke_url    = (known after apply)\n      + rest_api_id   = (known after apply)\n      + triggers      = (known after apply)\n    }\n\n  # aws_api_gateway_integration.health will be created\n  + resource \"aws_api_gateway_integration\" \"health\" {\n      + cache_namespace         = (known after apply)\n      + connection_type         = \"INTERNET\"\n      + http_method             = \"GET\"\n      + id                      = (known after apply)\n      + integration_http_method = \"POST\"\n      + passthrough_behavior    = (known after apply)\n      + resource_id             = (known after apply)\n      + rest_api_id             = (known after apply)\n      + timeout_milliseconds    = 29000\n      + type                    = \"AWS_PROXY\"\n      + uri                     = (known after apply)\n    }\n\n  # aws_api_gateway_integration.note_item will be created\n  + resource \"aws_api_gateway_integration\" \"note_item\" {\n      + cache_namespace         = (known after apply)\n      + connection_type         = \"INTERNET\"\n      + http_method             = \"ANY\"\n      + id                      = (known after apply)\n      + integration_http_method = \"POST\"\n      + passthrough_behavior    = (known after apply)\n      + resource_id             = (known after apply)\n      + rest_api_id             = (known after apply)\n      + timeout_milliseconds    = 29000\n      + type                    = \"AWS_PROXY\"\n      + uri                     = (known after apply)\n    }\n\n  # aws_api_gateway_integration.notes_collection will be created\n  + resource \"aws_api_gateway_integration\" \"notes_collection\" {\n      + cache_namespace         "
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.31
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "........................                                                 [100%]\n24 passed in 0.20s",
+      "duration_s": 0.72
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.13
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 14.71
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov (tool error \u2014 not gated)",
+      "passed": true,
+      "output": "{\n    \"check_type\": \"terraform\",\n    \"results\": {\n        \"failed_checks\": [\n            {\n                \"check_id\": \"CKV_AWS_338\",\n                \"bc_check_id\": \"BC_AWS_LOGGING_46\",\n                \"check_name\": \"Ensure CloudWatch log groups retains logs for at least 1 year\",\n                \"check_result\": {\n                    \"result\": \"FAILED\",\n                    \"evaluated_keys\": [\n                        \"retention_in_days\"\n                    ]\n                },\n                \"code_block\": null,\n                \"file_path\": \"/main.tf\",\n                \"file_abs_path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/main.tf\",\n                \"repo_file_path\": \"/main.tf\",\n                \"file_line_range\": [\n                    58,\n                    66\n                ],\n                \"resource\": \"aws_cloudwatch_log_group.lambda\",\n                \"evaluations\": null,\n                \"check_class\": \"checkov.terraform.checks.resource.aws.CloudWatchLogGroupRetentionYear\",\n                \"fixed_definition\": null,\n                \"entity_tags\": {\n                    \"Name\": \"/aws/lambda/notes-api-fn\"\n                },\n                \"caller_file_path\": null,\n                \"caller_file_line_range\": null,\n                \"resource_address\": null,\n                \"severity\": null,\n                \"bc_category\": null,\n                \"benchmarks\": null,\n                \"description\": null,\n                \"short_description\": null,\n                \"vulnerability_details\": null,\n                \"connected_node\": null,\n                \"guideline\": \"https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-logging-policies/bc-aws-338\",\n                \"details\": [],\n                \"check_len\": null,\n                \"definition_context_file_path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/main.tf\",\n                \"breadcrumbs\": {\n                    \"name\": [\n                        {\n                            \"type\": \"variable\",\n                            \"name\": \"lambda_log_group_name\",\n                            \"path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/variables.tf\",\n                            \"module_connection\": false\n                        },\n                        {\n                            \"type\": \"resource\",\n                            \"name\": \"aws_cloudwatch_log_group.lambda\",\n                            \"path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/main.tf\",\n                            \"module_connection\": false\n                        }\n                    ],\n                    \"tags.Name\": [\n                        {\n                            \"type\": \"variable\",\n                            \"name\": \"lambda_log_group_name\",\n                            \"path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/variables.tf\",\n                            \"module_connection\": false\n                        }\n                    ],\n                    \"retention_in_days\": [\n                        {\n                            \"type\": \"variable\",\n                            \"name\": \"log_retention_days\",\n                            \"path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/variables.tf\",\n                            \"module_connection\": false\n                        }\n                    ]\n                }\n            },\n            {\n                \"check_id\": \"CKV_AWS_338\",\n                \"bc_check_id\": \"BC_AWS_LOGGING_46\",\n                \"check_name\": \"Ensure CloudWatch log groups retains logs for at least 1 year\",\n                \"check_result\": {\n                    \"result\": \"FAILED\",\n                    \"evaluated_keys\": [\n                        \"retention_in_days\"\n                    ]\n                },\n                \"code_block\": null,\n                \"file_path\": \"/main.tf\",\n                \"file_abs_path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/main.tf\",\n                \"repo_file_path\": \"/main.tf\",\n                \"file_line_range\": [\n                    68,\n                    76\n                ],\n                \"resource\": \"aws_cloudwatch_log_group.api\",\n                \"evaluations\": null,\n                \"check_class\": \"checkov.terraform.checks.resource.aws.CloudWatchLogGroupRetentionYear\",\n                \"fixed_definition\": null,\n                \"entity_tags\": {\n                    \"Name\": \"/aws/apigateway/notes-api-gateway\"\n                },\n                \"caller_file_path\": null,\n                \"caller_file_line_range\": null,\n                \"resource_address\": null,\n                \"severity\": null,\n                \"bc_category\": null,\n                \"benchmarks\": null,\n                \"description\": null,\n                \"short_description\": null,\n                \"vulnerability_details\": null,\n                \"connected_node\": null,\n                \"guideline\": \"https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-logging-policies/bc-aws-338\",\n                \"details\": [],\n                \"check_len\": null,\n                \"definition_context_file_path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/main.tf\",\n                \"breadcrumbs\": {\n                    \"name\": [\n                        {\n                            \"type\": \"variable\",\n                            \"name\": \"api_log_group_name\",\n                            \"path\": \"/Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260830-202516-5334c4/infra/variables.tf\",\n                            \"module_connection\": false\n                        },\n                        {\n                            \"type\": \"resource\",\n   ",
+      "duration_s": 2.93
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_iam_policy_document.lambda_assume_role: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Reading...\ndata.aws_iam_policy_document.apigw_assume_role: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.apigw_assume_role: Read complete after 0s [id=269069340]\ndata.aws_iam_policy_document.lambda_assume_role: Read complete after 0s [id=666922913]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.archive_file.lambda will be read during apply\n  # (depends on a resource or a module with changes pending)\n <= data \"archive_file\" \"lambda\" {\n      + id                  = (known after apply)\n      + output_base64sha256 = (known after apply)\n      + output_base64sha512 = (known after apply)\n      + output_md5          = (known after apply)\n      + output_path         = \"./build/notes-api-fn.zip\"\n      + output_sha          = (known after apply)\n      + output_sha256       = (known after apply)\n      + output_sha512       = (known after apply)\n      + output_size         = (known after apply)\n      + source_file         = \"./build/handler.py\"\n      + type                = \"zip\"\n    }\n\n  # data.aws_iam_policy_document.apigw_logs will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"apigw_logs\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogGroup\",\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogGroups\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:FilterLogEvents\",\n              + \"logs:GetLogEvents\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + \"arn:aws:logs:us-east-1:000000000000:log-group:/aws/apigateway/*\",\n              + \"arn:aws:logs:us-east-1:000000000000:log-group:/aws/apigateway/*:*\",\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApiGatewayAccessLogging\"\n        }\n    }\n\n  # data.aws_iam_policy_document.lambda_permissions will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"lambda_permissions\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"NotesTableCrud\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"LambdaLogging\"\n        }\n      + statement {\n          + actions   = [\n              + \"xray:PutTelemetryRecords\",\n              + \"xray:PutTraceSegments\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + \"*\",\n            ]\n          + sid       = \"LambdaTracing\"\n        }\n    }\n\n  # aws_api_gateway_account.this will be created\n  + resource \"aws_api_gateway_account\" \"this\" {\n      + api_key_version     = (known after apply)\n      + cloudwatch_role_arn = (known after apply)\n      + features            = (known after apply)\n      + id                  = (known after apply)\n      + throttle_settings   = (known after apply)\n    }\n\n  # aws_api_gateway_deployment.notes will be created\n  + resource \"aws_api_gateway_deployment\" \"notes\" {\n      + created_date  = (known after apply)\n      + execution_arn = (known after apply)\n      + id            = (known after apply)\n      + invoke_url    = (known after apply)\n      + rest_api_id   = (known after apply)\n      + triggers      = (known after apply)\n    }\n\n  # aws_api_gateway_integration.health will be created\n  + resource \"aws_api_gateway_integration\" \"health\" {\n      + cache_namespace         = (known after apply)\n      + connection_type         = \"INTERNET\"\n      + http_method             = \"GET\"\n      + id                      = (known after apply)\n      + integration_http_method = \"POST\"\n      + passthrough_behavior    = (known after apply)\n      + resource_id             = (known after apply)\n      + rest_api_id             = (known after apply)\n      + timeout_milliseconds    = 29000\n      + type                    = \"AWS_PROXY\"\n      + uri                     = (known after apply)\n    }\n\n  # aws_api_gateway_integration.note_item will be created\n  + resource \"aws_api_gateway_integration\" \"note_item\" {\n      + cache_namespace         = (known after apply)\n      + connection_type         = \"INTERNET\"\n      + http_method             = \"ANY\"\n      + id                      = (known after apply)\n      + integration_http_method = \"POST\"\n      + passthrough_behavior    = (known after apply)\n      + resource_id             = (known after apply)\n      + rest_api_id             = (known after apply)\n      + timeout_milliseconds    = 29000\n      + type                    = \"AWS_PROXY\"\n      + uri                     = (known after apply)\n    }\n\n  # aws_api_gateway_integration.notes_collection will be created\n  + resource \"aws_api_gateway_integration\" \"notes_collection\" {\n      + cache_namespace         ",
+      "duration_s": 13.32
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 77,
+      "output_tokens": 1787,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1165
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2120,
+      "output_tokens": 29496,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2119,
+      "output_tokens": 24072,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.4251,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 21.8
+    },
+    {
+      "node": "generate_app",
+      "seconds": 271.9
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 241.1
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.2
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 17.6
+    },
+    {
+      "node": "deploy",
+      "seconds": 13.3
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 personal_notes_api (fastapi); AWS resources: DynamoDB:notes-table, Lambda:notes-api-fn, API Gateway:notes-api-gateway, IAM:notes-api-lambda-role, CloudWatch:notes-api-log-group",
+    "\ud83d\udc0d Generated application code (initial): 8 files \u2014 FastAPI notes service split into app.py (routes, validation, error envelopes), models.py (Pydantic models), storage.py (repository interface with a DynamoDB implementation using AWS_ENDPOINT_URL/us-east-1 plus an in-memory implementation) and lambda_handler.py (stdlib-only API Gateway\u2192ASGI adapter). Notes are keyed by owner_id/note_id with opaque base64 cursor pagination (limit 1-100, default 25), server-generated uuid4 ids and ISO-8601 UTC timestamps; DynamoDB conditional expressions produce 404s for missing notes and ClientError is mapped to a 503 storage error. tests/test_app.py exercises every endpoint through TestClient, the Lambda adapter and the DynamoDB repository with a fully stubbed boto3 resource, so it runs offline. Only flask/fastapi/uvicorn/boto3/pydantic-family packages are used, no debug literals or hardcoded secrets.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for personal_notes_api covering exactly the plan's aws_resources: a DynamoDB table (owner_id/note_id, PAY_PER_REQUEST, SSE + point-in-time recovery), a Python Lambda whose artifact is generated in-tree via local_file + the archive_file data source (self-contained boto3 CRUD handler for /health and /notes routes, so LocalStack deploys need no pre-built zip), a REST API Gateway with explicit /health, /notes and /notes/{note_id} resources using AWS_PROXY integrations plus a 'dev' stage with access logging, X-Ray tracing and encrypted method caching, least-privilege IAM roles (Lambda: only GetItem/PutItem/UpdateItem/DeleteItem/Query on the notes table ARN and writes to its own log group; API Gateway: scoped CloudWatch Logs access), and CloudWatch log groups with 30-day retention. Files are split into versions.tf (hashicorp/aws ~> 5.0 pinned, plus archive/local), variables.tf (defaults match the plan resource names), main.tf and outputs.tf; the provider sets default_tags with project and managed-by. Non-applicable Checkov checks (KMS CMKs, DLQ, VPC, code signing, WAF, mTLS, request validators) carry documented inline skips because those services are absent from LocalStack Community Edition or excluded by the plan.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov (tool error \u2014 not gated) \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "models.py",
+    "storage.py",
+    "lambda_handler.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

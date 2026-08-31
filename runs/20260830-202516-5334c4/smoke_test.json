@@ -1,0 +1,64 @@
+{
+  "run_id": "20260830-202516-5334c4",
+  "probed_at": "2026-08-31T03:47:35.412476+00:00",
+  "localstack_url": "http://localhost:4566",
+  "apis_found": 1,
+  "results": [
+    {
+      "api_id": "kjc2hksjma",
+      "stage": "dev",
+      "method": "GET",
+      "path": "/health",
+      "probe_path": "/health",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "api_id": "kjc2hksjma",
+      "stage": "dev",
+      "method": "POST",
+      "path": "/notes",
+      "probe_path": "/notes",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "api_id": "kjc2hksjma",
+      "stage": "dev",
+      "method": "GET",
+      "path": "/notes",
+      "probe_path": "/notes",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "api_id": "kjc2hksjma",
+      "stage": "dev",
+      "method": "GET",
+      "path": "/notes/{note_id}",
+      "probe_path": "/notes/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "api_id": "kjc2hksjma",
+      "stage": "dev",
+      "method": "PUT",
+      "path": "/notes/{note_id}",
+      "probe_path": "/notes/smoke-id",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "api_id": "kjc2hksjma",
+      "stage": "dev",
+      "method": "DELETE",
+      "path": "/notes/{note_id}",
+      "probe_path": "/notes/smoke-id",
+      "status": "404",
+      "serving": true
+    }
+  ],
+  "serving_endpoints": 6,
+  "total_endpoints": 6
+}

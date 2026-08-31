@@ -1,0 +1,17 @@
+# CloudForge UI configuration.
+# The custom styling in app.py is designed against the light base theme, so we
+# pin it here; otherwise a browser dark-mode preference produces unreadable
+# half-dark pages (and inconsistent dissertation screenshots).
+
+[theme]
+base = "light"
+primaryColor = "#1c7c84"
+backgroundColor = "#fbf7ef"
+secondaryBackgroundColor = "#f3ecdf"
+textColor = "#16313d"
+
+[client]
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false
