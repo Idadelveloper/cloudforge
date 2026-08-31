@@ -7,6 +7,7 @@ cost results (proposal section 3.2).
 
 import csv
 import io
+import json
 import os
 import time
 import uuid
@@ -15,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 from cloudforge.benchmark import (
@@ -35,6 +37,27 @@ CUSTOM_OPTION = "— write your own specification —"
 SPEC_CHOICE_KEY = "spec_choice"
 SPEC_INPUT_KEY = "spec_input"
 CUSTOM_DRAFT_KEY = "custom_spec_draft"
+
+# Client-side ticking clock: keeps counting every second even while the
+# server thread is busy inside a long LLM generation call.
+LIVE_TIMER_HTML = """
+<div id="cf-timer"
+     style="font-family: -apple-system, 'Segoe UI', sans-serif;
+            font-size: 1.05rem; font-weight: 700; color: #1c7c84;
+            padding: 0.3rem 0;">
+  &#9201; 0:00 elapsed
+</div>
+<script>
+  const cfStart = Date.now();
+  const cfEl = document.getElementById("cf-timer");
+  setInterval(function () {
+    const s = Math.floor((Date.now() - cfStart) / 1000);
+    const m = Math.floor(s / 60);
+    cfEl.textContent =
+      "\\u23F1 " + m + ":" + String(s % 60).padStart(2, "0") + " elapsed";
+  }, 1000);
+</script>
+"""
 
 
 @st.cache_data
@@ -563,17 +586,33 @@ def render_results(final_state: dict, max_iterations: int, run_id: str) -> None:
         col3.metric("Output tokens", f"{total_out:,}")
         col4.metric("Cache-read tokens", f"{cache_read:,}")
         col5.metric("Est. cost (USD)", f"${estimate_cost_usd(usage):.3f}")
-        st.metric(
+        report_path = RUNS_DIR / run_id / "report.json"
+        report_data = {}
+        if report_path.exists():
+            try:
+                report_data = json.loads(report_path.read_text())
+            except json.JSONDecodeError:
+                report_data = {}
+        iter_col, wall_col = st.columns(2)
+        iter_col.metric(
             "Correction iterations used",
             f"{final_state.get('iteration', 0)} / {max_iterations}",
         )
+        if report_data.get("wall_seconds") is not None:
+            wall_col.metric(
+                "Wall-clock time (whole run)",
+                f"{report_data['wall_seconds']:.0f} s",
+                help=(
+                    "True elapsed time. The per-node stage timings below sum to more "
+                    "because generation and validation branches run in parallel."
+                ),
+            )
         if usage:
             st.dataframe(usage, use_container_width=True)
         timings = final_state.get("timings", [])
         if timings:
             st.subheader("Stage timings")
             st.dataframe(timings, use_container_width=True)
-        report_path = RUNS_DIR / run_id / "report.json"
         if report_path.exists():
             st.download_button(
                 "⬇️ Download report.json",
@@ -675,6 +714,10 @@ def render_app() -> None:
         shown_events = 0
         started = time.time()
 
+        timer_slot = st.empty()
+        with timer_slot:
+            components.html(LIVE_TIMER_HTML, height=42)
+
         with st.status("Running the CloudForge pipeline…", expanded=True) as status_box:
             try:
                 for state_snapshot in graph.stream(
@@ -685,14 +728,20 @@ def render_app() -> None:
                     final_state = state_snapshot
                     events = state_snapshot.get("events", [])
                     for event in events[shown_events:]:
-                        st.write(event)
+                        st.write(f"`{int(time.time() - started)}s` · {event}")
                     shown_events = len(events)
             except GenerationError as exc:
+                timer_slot.markdown(
+                    f"⏱ **Run aborted after {time.time() - started:.0f}s**"
+                )
                 status_box.update(label="Pipeline error", state="error")
                 st.error(str(exc))
                 st.stop()
 
             succeeded = final_state.get("status") == "success"
+            timer_slot.markdown(
+                f"⏱ **Finished in {time.time() - started:.0f}s** (wall clock)"
+            )
             status_box.update(
                 label=(
                     f"Pipeline finished in {time.time() - started:.0f}s — "
