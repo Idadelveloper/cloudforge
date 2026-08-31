@@ -1,0 +1,7 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,DynamoDB table for tasks,True,True,True
+2,POST endpoint creating a task,True,True,True
+3,GET endpoint listing tasks,True,True,True
+4,Endpoint marking a task completed,True,True,True
+5,DELETE endpoint removing a task,True,True,True
+6,"Task model has description, due date, completed flag",True,True,True

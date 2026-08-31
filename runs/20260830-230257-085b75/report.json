@@ -1,0 +1,278 @@
+{
+  "run_id": "20260830-230257-085b75",
+  "timestamp": "2026-08-31T06:07:37.308122+00:00",
+  "started_at": "2026-08-31T06:02:57.491690+00:00",
+  "finished_at": "2026-08-31T06:07:37.308122+00:00",
+  "wall_seconds": 279.8,
+  "node_seconds_sum": 356.8,
+  "model": "claude-opus-5",
+  "status": "failed",
+  "spec": "Build a URL shortener API. Clients submit a long URL and receive a short code; visiting the short code redirects to the original URL and increments a visit counter. Include an endpoint returning the visit statistics for a code. Mappings are stored in DynamoDB.",
+  "benchmark_id": "S3-shortener",
+  "tier": "simple",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "30973096da49e84ec267f9a9499c87ac44111c2b22607d17ce212e9fa5a46e7e",
+    "complexity": {
+      "cloud_components": 1,
+      "aws_service_types": 1,
+      "api_operations": 3,
+      "domain_entities": 1,
+      "workflow_rules": 1,
+      "score": 6,
+      "rationale": "One data store with redirect and counter behaviour beyond plain CRUD."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for URL mappings",
+      "POST endpoint creating a short code",
+      "Redirect endpoint resolving a short code",
+      "Visit counter incremented on redirect",
+      "GET endpoint returning visit statistics"
+    ]
+  },
+  "repository": {
+    "commit": "75f6971bea2092ab5d3a9186aa1ebd4c14fc9fd9",
+    "dirty": true
+  },
+  "plan": {
+    "app_name": "url_shortener_api",
+    "summary": "A FastAPI JSON service that shortens long URLs into short base62 codes, persists the code-to-URL mappings in a DynamoDB table, redirects visitors of a short code to the original URL while atomically incrementing a visit counter, and exposes per-code visit statistics. The service is called directly by HTTP clients (browsers following short links and API consumers creating links) and talks to DynamoDB with the AWS SDK; no asynchronous or cloud-side execution is required.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe used by the evaluation harness; reports service status and DynamoDB table reachability."
+      },
+      {
+        "method": "POST",
+        "path": "/shorten",
+        "purpose": "Accept a JSON body with a long URL (and optional custom code), validate it, generate a unique short code, store the mapping in DynamoDB, and return the code plus the full short URL."
+      },
+      {
+        "method": "GET",
+        "path": "/{code}",
+        "purpose": "Look up the short code in DynamoDB, atomically increment its visit counter and last_visited_at, and issue an HTTP 307 redirect to the original long URL (404 if the code is unknown)."
+      },
+      {
+        "method": "GET",
+        "path": "/api/stats/{code}",
+        "purpose": "Return visit statistics for a short code: the original URL, total visit count, creation timestamp, and last visited timestamp."
+      },
+      {
+        "method": "GET",
+        "path": "/api/links",
+        "purpose": "List stored mappings (paginated scan) with their URLs and visit counts, for administrative inspection."
+      },
+      {
+        "method": "DELETE",
+        "path": "/api/links/{code}",
+        "purpose": "Delete a short code mapping from DynamoDB so the link no longer resolves."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "UrlMapping",
+        "fields": [
+          "code (string, partition key, base62 short code)",
+          "long_url (string, original destination URL)",
+          "created_at (string, ISO-8601 UTC timestamp)",
+          "visit_count (number, atomically incremented counter, default 0)",
+          "last_visited_at (string|null, ISO-8601 UTC timestamp of most recent redirect)"
+        ]
+      },
+      {
+        "name": "ShortenRequest",
+        "fields": [
+          "url (string, required, must be http/https absolute URL)",
+          "custom_code (string, optional, 3-32 chars of [A-Za-z0-9_-])"
+        ]
+      },
+      {
+        "name": "ShortenResponse",
+        "fields": [
+          "code (string)",
+          "short_url (string)",
+          "long_url (string)",
+          "created_at (string)"
+        ]
+      },
+      {
+        "name": "StatsResponse",
+        "fields": [
+          "code (string)",
+          "long_url (string)",
+          "visit_count (integer)",
+          "created_at (string)",
+          "last_visited_at (string|null)"
+        ]
+      },
+      {
+        "name": "ErrorResponse",
+        "fields": [
+          "detail (string)",
+          "code (string, optional machine-readable error key)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "url_shortener_mappings",
+        "justification": "Primary storage explicitly required by the spec: table keyed on the short `code` attribute holding the long URL, creation timestamp and the visit counter that the redirect endpoint increments with an atomic ADD UpdateExpression."
+      },
+      {
+        "service": "IAM",
+        "name": "url_shortener_service_role",
+        "justification": "Execution identity assumed by the backend service; grants only the DynamoDB item operations (GetItem, PutItem with condition, UpdateItem, DeleteItem, Scan) on the mappings table plus CloudWatch Logs write access."
+      },
+      {
+        "service": "IAM",
+        "name": "url_shortener_dynamodb_policy",
+        "justification": "Least-privilege policy document attached to the service role that scopes the DynamoDB permissions to the url_shortener_mappings table ARN used by the application code."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/cloudforge/url-shortener",
+        "justification": "Log group the application writes structured request/redirect logs to (link creations, cache misses, 404s), giving operational visibility for the shortener service."
+      }
+    ],
+    "assumptions": []
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": false,
+    "output": ""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 4,
+      "failed": 1
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.3
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "............................                                             [100%]\n28 passed in 0.22s",
+      "duration_s": 0.78
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.11
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 13.93
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 48 passed, 4 failed, 0 skipped.\nCKV_AWS_338 Ensure CloudWatch log groups retains logs for at least 1 year on aws_cloudwatch_log_group.url_shortener (/main.tf)\nCKV_AWS_111 Ensure IAM policies does not allow write access without constraints on aws_iam_policy_document.kms_key (/main.tf)\nCKV_AWS_356 Ensure no IAM policies documents allow \"*\" as a statement's resource for restrictable actions on aws_iam_policy_document.kms_key (/main.tf)\nCKV_AWS_109 Ensure IAM policies does not allow permissions management / resource exposure without constraints on aws_iam_policy_document.kms_key (/main.tf)",
+      "duration_s": 2.56
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 102,
+      "output_tokens": 1641,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 1699,
+      "output_tokens": 26097,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 1698,
+      "output_tokens": 7811,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 0.9268,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 21.4
+    },
+    {
+      "node": "generate_app",
+      "seconds": 241.9
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 75.8
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.2
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 16.5
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 url_shortener_api (fastapi); AWS resources: DynamoDB:url_shortener_mappings, IAM:url_shortener_service_role, IAM:url_shortener_dynamodb_policy, CloudWatch:/cloudforge/url-shortener",
+    "\ud83d\udc0d Generated application code (initial): 6 files \u2014 FastAPI URL shortener with a decoupled storage layer. `storage.py` exposes a small `UrlRepository` interface with a `DynamoUrlRepository` (boto3 resource honouring `AWS_ENDPOINT_URL` + `us-east-1` default, table name from `MAPPINGS_TABLE_NAME` defaulting to `url_shortener_mappings`) that uses a conditional `PutItem` for uniqueness, an atomic `ADD visit_count` UpdateItem for redirects, paginated `Scan`, conditional `DeleteItem` and `DescribeTable` for health; an `InMemoryUrlRepository` is provided for local/testing use. `app.py` implements GET /health, GET /, POST /shorten (URL + custom-code validation, collision retries, 409 on duplicates), GET /{code} (307 redirect, declared last so it doesn't shadow other routes), GET /api/stats/{code}, GET /api/links (limit/start pagination) and DELETE /api/links/{code}, mapping storage failures to 503 and logging link creation/misses. Tests use `fastapi.testclient.TestClient` with a dependency-injected fake repository plus a stub boto3 Table/resource, so they run entirely offline; flake8 (120 cols) and Bandit-safe patterns (no bind-all host literal, no secrets, `secrets.choice` for codes) are respected.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the url_shortener_api plan, limited to the four planned AWS resources plus the KMS key required to satisfy encryption checks.\n\nFiles:\n- versions.tf: terraform block, required_version >= 1.3.0, hashicorp/aws pinned ~> 5.0.\n- variables.tf: defaults matching the plan names (dynamodb_table_name = url_shortener_mappings, service_role_name = url_shortener_service_role, dynamodb_policy_name = url_shortener_dynamodb_policy, log_group_name = /cloudforge/url-shortener), region, tags, retention and KMS settings.\n- main.tf: provider with default_tags (project, managed-by, environment); customer managed aws_kms_key with rotation enabled and a scoped key policy (account root admin, CloudWatch Logs via EncryptionContext ArnLike condition, DynamoDB via CallerAccount condition) plus alias; aws_dynamodb_table with PAY_PER_REQUEST billing, `code` string partition key, point_in_time_recovery enabled and server_side_encryption with the CMK; aws_cloudwatch_log_group with retention (90 days) and KMS encryption; aws_iam_role with a concrete service principal trust policy (no wildcard principals), aws_iam_policy built from aws_iam_policy_document granting only DescribeTable/GetItem/PutItem/UpdateItem/DeleteItem/Query/Scan/BatchGetItem on the table ARN, CMK usage on that key ARN, and log stream writes on that log group ARN, and the role/policy attachment.\n- outputs.tf: table name/ARN/hash key, role name/ARN, policy ARN, log group name/ARN, KMS key ARN, region.\n\nCheckov-relevant hardening: DynamoDB PITR + CMK SSE, log group retention + CMK encryption, KMS key rotation, no \"*\" actions or resources in the IAM identity policy, no wildcard assume-role principal. Only DynamoDB, IAM, CloudWatch Logs and KMS are used \u2014 all LocalStack Community compatible \u2014 and no Lambda, RDS, ECS, EKS or ElastiCache resources are created.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\ud83d\uded1 Validation still failing after 0 correction iteration(s); the 0-iteration bound is reached (Temporal Blind Spot safeguard)."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

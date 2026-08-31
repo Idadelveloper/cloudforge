@@ -1,0 +1,282 @@
+{
+  "run_id": "20260830-222513-4c7120",
+  "timestamp": "2026-08-31T05:29:47.501594+00:00",
+  "started_at": "2026-08-31T05:25:13.113665+00:00",
+  "finished_at": "2026-08-31T05:29:47.501594+00:00",
+  "wall_seconds": 274.4,
+  "node_seconds_sum": 322.3,
+  "model": "claude-opus-5",
+  "status": "failed",
+  "spec": "Build a to-do list REST API. Users can add tasks, list tasks, mark a task as completed, and delete tasks. Each task has a description, a due date and a completed flag. Tasks are stored in DynamoDB.",
+  "benchmark_id": "S2-todo",
+  "tier": "simple",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "762da1e427488381449e9b38b7d3d74424ca9c4f0fb89b9197c8b836a5a9909e",
+    "complexity": {
+      "cloud_components": 1,
+      "aws_service_types": 1,
+      "api_operations": 4,
+      "domain_entities": 1,
+      "workflow_rules": 0,
+      "score": 6,
+      "rationale": "Single DynamoDB-backed task entity with a small CRUD surface."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for tasks",
+      "POST endpoint creating a task",
+      "GET endpoint listing tasks",
+      "Endpoint marking a task completed",
+      "DELETE endpoint removing a task",
+      "Task model has description, due date, completed flag"
+    ]
+  },
+  "repository": {
+    "commit": "75f6971bea2092ab5d3a9186aa1ebd4c14fc9fd9",
+    "dirty": true
+  },
+  "plan": {
+    "app_name": "todo_api",
+    "summary": "A FastAPI REST service for managing to-do tasks. Clients (web/mobile front-ends or scripts) can create tasks with a description and due date, list all tasks, mark an individual task as completed, and delete tasks. All task records persist in a single DynamoDB table that the service accesses directly with boto3.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/tasks",
+        "purpose": "Create a new task from a JSON body containing description and due_date; generates a task_id, sets completed=false, stores the item in DynamoDB and returns the created task."
+      },
+      {
+        "method": "GET",
+        "path": "/tasks",
+        "purpose": "List all tasks via a DynamoDB scan, with an optional completed=true/false query filter."
+      },
+      {
+        "method": "GET",
+        "path": "/tasks/{task_id}",
+        "purpose": "Retrieve a single task by its id; returns 404 if it does not exist."
+      },
+      {
+        "method": "PATCH",
+        "path": "/tasks/{task_id}/complete",
+        "purpose": "Mark the specified task as completed (sets completed=true and completed_at) and return the updated task."
+      },
+      {
+        "method": "PATCH",
+        "path": "/tasks/{task_id}",
+        "purpose": "Update mutable fields of a task (description, due_date, completed) and return the updated task."
+      },
+      {
+        "method": "DELETE",
+        "path": "/tasks/{task_id}",
+        "purpose": "Delete the specified task from DynamoDB; returns 404 if the task does not exist."
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe used by the evaluation harness; reports service status and DynamoDB table reachability."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Task",
+        "fields": [
+          "task_id: str (UUID4, DynamoDB partition key)",
+          "description: str (required, non-empty)",
+          "due_date: str (ISO-8601 date, YYYY-MM-DD)",
+          "completed: bool (default false)",
+          "created_at: str (ISO-8601 UTC timestamp)",
+          "updated_at: str (ISO-8601 UTC timestamp)",
+          "completed_at: str | None (ISO-8601 UTC timestamp, set when marked complete)"
+        ]
+      },
+      {
+        "name": "TaskCreateRequest",
+        "fields": [
+          "description: str (required)",
+          "due_date: str (required, ISO-8601 date)",
+          "completed: bool (optional, default false)"
+        ]
+      },
+      {
+        "name": "TaskUpdateRequest",
+        "fields": [
+          "description: str | None",
+          "due_date: str | None",
+          "completed: bool | None"
+        ]
+      },
+      {
+        "name": "TaskListResponse",
+        "fields": [
+          "items: list[Task]",
+          "count: int"
+        ]
+      },
+      {
+        "name": "ErrorResponse",
+        "fields": [
+          "detail: str"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "tasks",
+        "justification": "Primary persistence for task records as required by the spec ('Tasks are stored in DynamoDB'). Partition key task_id (String), PAY_PER_REQUEST billing; read/written directly by the FastAPI service on every endpoint."
+      },
+      {
+        "service": "IAM",
+        "name": "todo_api_app_role",
+        "justification": "Role/policy granting the backend service least-privilege access (GetItem, PutItem, UpdateItem, DeleteItem, Scan, DescribeTable) to the tasks table only."
+      }
+    ],
+    "assumptions": [
+      "No authentication or multi-user separation was specified, so the API is unauthenticated and all tasks live in a single shared namespace (no user_id partitioning).",
+      "Task ids are server-generated UUID4 strings rather than client-supplied.",
+      "due_date is stored as an ISO-8601 date string (YYYY-MM-DD) and validated on input; times of day are out of scope.",
+      "Listing uses a DynamoDB Scan because task volume is expected to be small; no secondary indexes or pagination cursors are planned beyond an optional completed filter.",
+      "'Mark a task as completed' is exposed as a dedicated PATCH /tasks/{task_id}/complete endpoint, plus a general PATCH for other field updates.",
+      "No queueing, notification, file upload, scheduling or secret storage is implied, so SQS, SNS, S3, Lambda, API Gateway and Secrets Manager are intentionally omitted; the service runs locally and calls DynamoDB directly.",
+      "CloudWatch is not provisioned as a separate resource since the app logs to stdout and no Lambda functions exist to emit metrics.",
+      "DynamoDB endpoint, region and table name are supplied via environment variables (AWS_ENDPOINT_URL, AWS_REGION, TASKS_TABLE) for LocalStack compatibility."
+    ]
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": false,
+    "output": ""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 4,
+      "failed": 1
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.31
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": ".........................                                                [100%]\n25 passed in 0.21s",
+      "duration_s": 0.74
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.11
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 13.41
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 33 passed, 1 failed, 0 skipped.\nCKV_AWS_119 Ensure DynamoDB Tables are encrypted using a KMS Customer Managed CMK on aws_dynamodb_table.tasks (/main.tf)",
+      "duration_s": 2.65
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 90,
+      "output_tokens": 1511,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 1889,
+      "output_tokens": 25942,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 1888,
+      "output_tokens": 4644,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 0.8423,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 18.1
+    },
+    {
+      "node": "generate_app",
+      "seconds": 240.1
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 46.8
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.2
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 16.1
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 todo_api (fastapi); AWS resources: DynamoDB:tasks, IAM:todo_api_app_role",
+    "\ud83d\udc0d Generated application code (initial): 7 files \u2014 FastAPI to-do API with a decoupled DynamoDB data layer. `models.py` holds pydantic v1/v2-compatible schemas; `storage.py` defines a `TaskRepository` interface with a boto3 `DynamoDBTaskRepository` (endpoint from `AWS_ENDPOINT_URL`, region default us-east-1, table from `TASKS_TABLE`) and an `InMemoryTaskRepository`; `app.py` wires routes (POST/GET/PATCH/PATCH complete/DELETE /tasks, /health, /) via FastAPI dependency injection, validating due dates and descriptions and mapping backend failures to 503. `tests/test_app.py` exercises every endpoint with `TestClient` plus fake boto3 resources \u2014 no network, no LocalStack. Root `conftest.py` makes modules importable; requirements limited to fastapi, uvicorn, boto3, pydantic.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for todo_api provisioning exactly the two planned AWS resources on LocalStack-supported services.\n\n- versions.tf: terraform block, required_version >= 1.3.0, hashicorp/aws pinned ~> 5.0.\n- main.tf: aws provider with default_tags (project, managed-by); aws_dynamodb_table \"tasks\" with PAY_PER_REQUEST billing (satisfies CKV2_AWS_16 without autoscaling), String partition key task_id, point_in_time_recovery enabled (CKV_AWS_28) and server_side_encryption enabled (CKV_AWS_119); IAM role todo_api_app_role whose trust policy names only ec2/lambda service principals (no wildcard principals, CKV_AWS_60/61) plus a customer-managed policy granting only GetItem, PutItem, UpdateItem, DeleteItem, Query, Scan and DescribeTable scoped to the tasks table ARN and its index ARNs (no \"*\" actions or resources), attached via aws_iam_role_policy_attachment.\n- variables.tf: defaults matching the plan (tasks_table_name = \"tasks\", app_role_name = \"todo_api_app_role\", region us-east-1, project todo_api).\n- outputs.tf: table name/ARN/hash key, role name/ARN, policy ARN and region for wiring TASKS_TABLE / AWS_REGION env vars.\n\nNo S3, SQS, SNS, Lambda, API Gateway, KMS or Secrets Manager resources are created since the plan does not use them; all resources trace directly to the plan's aws_resources list.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\ud83d\uded1 Validation still failing after 0 correction iteration(s); the 0-iteration bound is reached (Temporal Blind Spot safeguard)."
+  ],
+  "app_files": [
+    "app.py",
+    "models.py",
+    "storage.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

@@ -1,0 +1,5 @@
+run_id: 20260830-224645-bcca53
+app_coverage: 6/6
+iac_coverage: 6/6
+joint_congruence: 6/6
+note: App↔TF aligned (todo_tasks/TASKS_TABLE_NAME); app_probe 7/7 against deployed infra; no embedded compute. Checkov pass is skip-dependent: 2 model-authored checkov:skip (CKV_AWS_119, CKV_AWS_158) claiming LocalStack lacks KMS — factually incorrect, S1-bounded deployed KMS on the same emulator. Extra CloudWatch log group beyond plan scope.

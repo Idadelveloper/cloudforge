@@ -564,8 +564,16 @@ def render_results(final_state: dict, max_iterations: int, run_id: str) -> None:
             st.info("No validation results recorded.")
 
     with tab_deploy:
+        deploy_attempted = any(
+            entry["target"] == "deploy" for entry in final_state.get("validations", [])
+        )
         if final_state.get("deploy_skipped"):
             st.warning(final_state.get("deploy_output", "Deployment skipped."))
+        elif final_state.get("deploy_enabled") and not deploy_attempted:
+            st.info(
+                "Deployment was **not attempted** — static validation failed first, "
+                "so there is no deploy outcome for this run."
+            )
         elif final_state.get("deploy_enabled"):
             if final_state.get("deploy_passed"):
                 st.success("Deployed to LocalStack.")

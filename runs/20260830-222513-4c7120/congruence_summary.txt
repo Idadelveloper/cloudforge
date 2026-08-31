@@ -1,0 +1,5 @@
+run_id: 20260830-222513-4c7120
+app_coverage: 6/6
+iac_coverage: 6/6
+joint_congruence: 6/6
+note: Fully congruent data+IAM design, no embedded compute, names aligned (tasks/TASKS_TABLE). Failed CKV_AWS_119 only (AWS-owned SSE key, no CMK — plan omitted KMS). Trust policy names ec2/lambda principals the deployment never uses — cosmetic.

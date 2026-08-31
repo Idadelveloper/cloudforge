@@ -1,0 +1,292 @@
+{
+  "run_id": "20260830-224645-bcca53",
+  "timestamp": "2026-08-31T05:51:17.383012+00:00",
+  "started_at": "2026-08-31T05:46:45.393799+00:00",
+  "finished_at": "2026-08-31T05:51:17.383012+00:00",
+  "wall_seconds": 272.0,
+  "node_seconds_sum": 325.5,
+  "model": "claude-opus-5",
+  "status": "success",
+  "spec": "Build a to-do list REST API. Users can add tasks, list tasks, mark a task as completed, and delete tasks. Each task has a description, a due date and a completed flag. Tasks are stored in DynamoDB.",
+  "benchmark_id": "S2-todo",
+  "tier": "simple",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "762da1e427488381449e9b38b7d3d74424ca9c4f0fb89b9197c8b836a5a9909e",
+    "complexity": {
+      "cloud_components": 1,
+      "aws_service_types": 1,
+      "api_operations": 4,
+      "domain_entities": 1,
+      "workflow_rules": 0,
+      "score": 6,
+      "rationale": "Single DynamoDB-backed task entity with a small CRUD surface."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for tasks",
+      "POST endpoint creating a task",
+      "GET endpoint listing tasks",
+      "Endpoint marking a task completed",
+      "DELETE endpoint removing a task",
+      "Task model has description, due date, completed flag"
+    ]
+  },
+  "repository": {
+    "commit": "75f6971bea2092ab5d3a9186aa1ebd4c14fc9fd9",
+    "dirty": true
+  },
+  "plan": {
+    "app_name": "todo_task_api",
+    "summary": "A JSON REST API for managing a personal to-do list. Clients (a web/mobile front end or the evaluation harness) create tasks with a description and due date, list all tasks (optionally filtered by completion state), fetch a single task, mark a task completed, and delete tasks. All task records persist in a single DynamoDB table keyed by a server-generated task id. The service runs as a standalone FastAPI process that talks to DynamoDB directly via boto3; no asynchronous, scheduled, or event-driven processing is implied by the specification, so no queue, topic, or Lambda component is planned.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/tasks",
+        "purpose": "Create a new task from a JSON body containing description and due_date; generates task_id, sets completed=false, persists the item to DynamoDB and returns the created task with 201."
+      },
+      {
+        "method": "GET",
+        "path": "/tasks",
+        "purpose": "List all tasks via a DynamoDB scan, with an optional ?completed=true|false query filter, returning a JSON array of task objects."
+      },
+      {
+        "method": "GET",
+        "path": "/tasks/{task_id}",
+        "purpose": "Fetch a single task by id from DynamoDB; returns 404 if the task does not exist."
+      },
+      {
+        "method": "PATCH",
+        "path": "/tasks/{task_id}",
+        "purpose": "Partially update a task (description, due_date and/or completed flag) using a DynamoDB conditional update; returns the updated task or 404."
+      },
+      {
+        "method": "POST",
+        "path": "/tasks/{task_id}/complete",
+        "purpose": "Convenience endpoint that marks the specified task as completed (sets completed=true and completed_at timestamp) and returns the updated task."
+      },
+      {
+        "method": "DELETE",
+        "path": "/tasks/{task_id}",
+        "purpose": "Delete the specified task from DynamoDB; returns 204 on success and 404 if the task id is unknown."
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe used by the evaluation harness; confirms the process is up and the DynamoDB table is reachable."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Task",
+        "fields": [
+          "task_id: str (uuid4, DynamoDB partition key)",
+          "description: str (required, non-empty)",
+          "due_date: str (ISO-8601 date, YYYY-MM-DD)",
+          "completed: bool (defaults to false)",
+          "created_at: str (ISO-8601 UTC timestamp)",
+          "updated_at: str (ISO-8601 UTC timestamp)",
+          "completed_at: Optional[str] (ISO-8601 UTC timestamp, set when completed becomes true)"
+        ]
+      },
+      {
+        "name": "TaskCreateRequest",
+        "fields": [
+          "description: str (required)",
+          "due_date: str (required, ISO-8601 date)",
+          "completed: Optional[bool] (defaults to false)"
+        ]
+      },
+      {
+        "name": "TaskUpdateRequest",
+        "fields": [
+          "description: Optional[str]",
+          "due_date: Optional[str]",
+          "completed: Optional[bool]"
+        ]
+      },
+      {
+        "name": "TaskListResponse",
+        "fields": [
+          "items: List[Task]",
+          "count: int"
+        ]
+      },
+      {
+        "name": "ErrorResponse",
+        "fields": [
+          "detail: str",
+          "code: Optional[str]"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "todo_tasks",
+        "justification": "The specification explicitly states tasks are stored in DynamoDB. Single table with partition key task_id (String), PAY_PER_REQUEST billing, storing description, due_date, completed and timestamps. Backs every create/list/get/update/complete/delete endpoint."
+      },
+      {
+        "service": "IAM",
+        "name": "todo_task_api_app_policy",
+        "justification": "Least-privilege policy (GetItem, PutItem, UpdateItem, DeleteItem, Scan, DescribeTable) scoped to the todo_tasks table ARN, attached to an IAM role/user whose credentials the standalone FastAPI service uses for its boto3 DynamoDB calls."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/todo-task-api/application",
+        "justification": "Log group the application's boto3/CloudWatch Logs handler writes request and DynamoDB error events to, giving operators visibility into failed task operations."
+      }
+    ],
+    "assumptions": [
+      "No authentication or multi-tenancy was specified, so the API is treated as single-user and unauthenticated; there is no user_id attribute and no per-user partitioning.",
+      "Task ids are server-generated UUID4 strings returned to the client rather than client-supplied.",
+      "due_date is stored as an ISO-8601 date string (YYYY-MM-DD) and validated by Pydantic; no timezone handling or recurrence is implemented.",
+      "Listing uses a DynamoDB Scan because the dataset is a single user's to-do list and no sort/index requirements were given; results are returned unpaginated (a simple limit query parameter defaults to a sane cap).",
+      "'Mark a task as completed' is exposed both as a dedicated POST /tasks/{id}/complete action and via PATCH on the completed flag, so either conventional client style works.",
+      "Deleting a non-existent task returns 404 rather than silently succeeding, using a conditional delete.",
+      "No asynchronous notification, reminder, scheduling, or file-attachment behaviour was requested, so SQS, SNS, Lambda, API Gateway, S3 and Secrets Manager are deliberately not provisioned.",
+      "AWS endpoints, region and the table name are supplied to the service through environment variables so it can point at LocalStack during evaluation."
+    ]
+  },
+  "max_iterations": 3,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_caller_identity.current: Reading...\ndata.aws_iam_policy_document.app_assume_role: Reading...\ndata.aws_region.current: Reading...\ndata.aws_iam_policy_document.app_assume_role: Read complete after 0s [id=3961211294]\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.app will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"TaskTableDataAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogWrite\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.application will be created\n  + resource \"aws_cloudwatch_log_group\" \"application\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/todo-task-api/application\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"      = \"/todo-task-api/application\"\n          + \"component\" = \"application-logs\"\n        }\n      + tags_all          = {\n          + \"Name\"        = \"/todo-task-api/application\"\n          + \"component\"   = \"application-logs\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"terraform\"\n          + \"project\"     = \"todo_task_api\"\n        }\n    }\n\n  # aws_dynamodb_table.todo_tasks will be created\n  + resource \"aws_dynamodb_table\" \"todo_tasks\" {\n      + arn                         = (known after apply)\n      + billing_mode                = \"PAY_PER_REQUEST\"\n      + deletion_protection_enabled = false\n      + hash_key                    = \"task_id\"\n      + id                          = (known after apply)\n      + name                        = \"todo_tasks\"\n      + read_capacity               = (known after apply)\n      + stream_arn                  = (known after apply)\n      + stream_label                = (known after apply)\n      + stream_view_type            = (known after apply)\n      + tags                        = {\n          + \"Name\"      = \"todo_tasks\"\n          + \"component\" = \"task-store\"\n        }\n      + tags_all                    = {\n          + \"Name\"        = \"todo_tasks\"\n          + \"component\"   = \"task-store\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"terraform\"\n          + \"project\"     = \"todo_task_api\"\n        }\n      + write_capacity              = (known after apply)\n\n      + attribute {\n          + name = \"task_id\"\n          + type = \"S\"\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl {\n          + enabled        = false\n            # (1 unchanged attribute hidden)\n        }\n    }\n\n  # aws_iam_policy.app will be created\n  + resource \"aws_iam_policy\" \"app\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least privilege policy for the todo_task_api service: task table CRUD plus application log writes.\"\n      + id               = (known after apply)\n      + name             = \"todo_task_api_app_policy\"\n      + name_prefix      = (known after apply)\n      + path             = \"/\"\n      + policy           = (known after apply)\n      + policy_id        = (known after apply)\n      + tags             = {\n          + \"Name\"      = \"todo_task_api_app_policy\"\n          + \"component\" = \"application-identity\"\n        }\n      + tags_all         = {\n          + \"Name\"        = \"todo_task_api_app_policy\"\n          + \"component\"   = \"application-identity\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"terraform\"\n          + \"project\"     = \"todo_task_api\"\n        }\n    }\n\n  # aws_iam_role.app will be created\n  + resource \"aws_iam_role\" \"app\" {\n      + arn                   = (known after apply)\n      + assume_role_policy    = jsonencode(\n            {\n              + Statement = [\n                  + {\n                      + Action    = \"sts:AssumeRole\"\n                      + Effect    = \"Allow\"\n                      + Principal = {\n                          + Service = \"ec2.amazonaws.com\"\n                        }\n                      + Sid       = \"AllowComputeToAssumeAppRole\"\n                    },\n                ]\n              + Version   = \"2012-10-17\"\n            }\n        )\n      + create_date           = (known after apply)\n      + description           = \"Role assumed by the todo_task_api FastAPI service for DynamoDB and CloudWatch Logs access.\"\n      + force_detach_policies = false\n      + id                    = (known after apply)\n  "
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.23
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "....................                                                     [100%]\n20 passed in 0.22s",
+      "duration_s": 0.77
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.11
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 14.71
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 35 passed, 0 failed, 2 skipped.",
+      "duration_s": 4.88
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_caller_identity.current: Reading...\ndata.aws_iam_policy_document.app_assume_role: Reading...\ndata.aws_region.current: Reading...\ndata.aws_iam_policy_document.app_assume_role: Read complete after 0s [id=3961211294]\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.app will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"TaskTableDataAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogWrite\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.application will be created\n  + resource \"aws_cloudwatch_log_group\" \"application\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/todo-task-api/application\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"      = \"/todo-task-api/application\"\n          + \"component\" = \"application-logs\"\n        }\n      + tags_all          = {\n          + \"Name\"        = \"/todo-task-api/application\"\n          + \"component\"   = \"application-logs\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"terraform\"\n          + \"project\"     = \"todo_task_api\"\n        }\n    }\n\n  # aws_dynamodb_table.todo_tasks will be created\n  + resource \"aws_dynamodb_table\" \"todo_tasks\" {\n      + arn                         = (known after apply)\n      + billing_mode                = \"PAY_PER_REQUEST\"\n      + deletion_protection_enabled = false\n      + hash_key                    = \"task_id\"\n      + id                          = (known after apply)\n      + name                        = \"todo_tasks\"\n      + read_capacity               = (known after apply)\n      + stream_arn                  = (known after apply)\n      + stream_label                = (known after apply)\n      + stream_view_type            = (known after apply)\n      + tags                        = {\n          + \"Name\"      = \"todo_tasks\"\n          + \"component\" = \"task-store\"\n        }\n      + tags_all                    = {\n          + \"Name\"        = \"todo_tasks\"\n          + \"component\"   = \"task-store\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"terraform\"\n          + \"project\"     = \"todo_task_api\"\n        }\n      + write_capacity              = (known after apply)\n\n      + attribute {\n          + name = \"task_id\"\n          + type = \"S\"\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl {\n          + enabled        = false\n            # (1 unchanged attribute hidden)\n        }\n    }\n\n  # aws_iam_policy.app will be created\n  + resource \"aws_iam_policy\" \"app\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least privilege policy for the todo_task_api service: task table CRUD plus application log writes.\"\n      + id               = (known after apply)\n      + name             = \"todo_task_api_app_policy\"\n      + name_prefix      = (known after apply)\n      + path             = \"/\"\n      + policy           = (known after apply)\n      + policy_id        = (known after apply)\n      + tags             = {\n          + \"Name\"      = \"todo_task_api_app_policy\"\n          + \"component\" = \"application-identity\"\n        }\n      + tags_all         = {\n          + \"Name\"        = \"todo_task_api_app_policy\"\n          + \"component\"   = \"application-identity\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"terraform\"\n          + \"project\"     = \"todo_task_api\"\n        }\n    }\n\n  # aws_iam_role.app will be created\n  + resource \"aws_iam_role\" \"app\" {\n      + arn                   = (known after apply)\n      + assume_role_policy    = jsonencode(\n            {\n              + Statement = [\n                  + {\n                      + Action    = \"sts:AssumeRole\"\n                      + Effect    = \"Allow\"\n                      + Principal = {\n                          + Service = \"ec2.amazonaws.com\"\n                        }\n                      + Sid       = \"AllowComputeToAssumeAppRole\"\n                    },\n                ]\n              + Version   = \"2012-10-17\"\n            }\n        )\n      + create_date           = (known after apply)\n      + description           = \"Role assumed by the todo_task_api FastAPI service for DynamoDB and CloudWatch Logs access.\"\n      + force_detach_policies = false\n      + id                    = (known after apply)\n  ",
+      "duration_s": 7.96
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 90,
+      "output_tokens": 2013,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2216,
+      "output_tokens": 23505,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2215,
+      "output_tokens": 5318,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 0.814,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 25.1
+    },
+    {
+      "node": "generate_app",
+      "seconds": 219.2
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 52.5
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.1
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 19.6
+    },
+    {
+      "node": "deploy",
+      "seconds": 8.0
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 todo_task_api (fastapi); AWS resources: DynamoDB:todo_tasks, IAM:todo_task_api_app_policy, CloudWatch:/todo-task-api/application",
+    "\ud83d\udc0d Generated application code (initial): 5 files \u2014 FastAPI to-do API with a decoupled storage layer. `storage.py` defines a small `TaskRepository` interface with two implementations: `DynamoTaskRepository` (boto3 resource honouring `AWS_ENDPOINT_URL`, region default `us-east-1`, table from `TASKS_TABLE_NAME` defaulting to `todo_tasks`, conditional update/delete for 404 semantics, paginated scan with optional completed filter, `describe_table` health check) and `InMemoryTaskRepository`. `app.py` exposes POST/GET/PATCH/DELETE `/tasks`, `/tasks/{id}`, `/tasks/{id}/complete` and `/health` with pydantic models (Task, TaskCreateRequest, TaskUpdateRequest, TaskListResponse, ErrorResponse), manual ISO-date/description validation, and dependency-injected repository. `tests/test_app.py` covers every endpoint via `TestClient` with the in-memory repo injected through `dependency_overrides`, plus a stub boto3 Table exercising the DynamoDB repository and monkeypatched `boto3.resource` for env-var configuration \u2014 no network or LocalStack required. Only fastapi/uvicorn/boto3/pydantic are used; no debug literals, secrets, or shell/eval usage.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for todo_task_api covering exactly the three planned AWS resources.\n\n- versions.tf: terraform block with required_version and hashicorp/aws pinned to ~> 5.0.\n- variables.tf: region, project/environment, table name defaulting to `todo_tasks`, hash key `task_id`, policy name `todo_task_api_app_policy`, role name, log group `/todo-task-api/application`, retention.\n- main.tf: provider with default_tags (project, managed-by, environment); `aws_dynamodb_table.todo_tasks` (PAY_PER_REQUEST, String partition key task_id, point-in-time recovery on, server-side encryption on); `aws_cloudwatch_log_group.application` with explicit 365-day retention; IAM role with an EC2 service assume-role document plus a customer-managed policy limited to GetItem/PutItem/UpdateItem/DeleteItem/Scan/Query/DescribeTable on the single table ARN and CreateLogStream/PutLogEvents/DescribeLogStreams on the single log group ARN \u2014 no wildcard actions or resources \u2014 attached via aws_iam_role_policy_attachment.\n- outputs.tf: region, account id, table name/ARN/hash key, log group name/ARN, role name/ARN and policy ARN so the app can be wired via environment variables.\n\nNo S3/SQS/SNS/Lambda/API Gateway/Secrets Manager resources are created because the plan does not require them. Two Checkov CMK checks (CKV_AWS_119 for DynamoDB, CKV_AWS_158 for the log group) are explicitly skipped inline with the reason that the LocalStack Community deployment target provides no KMS customer-managed keys; AWS-managed encryption is enabled in both cases.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

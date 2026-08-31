@@ -1,0 +1,5 @@
+run_id: 20260830-232352-8a227e
+app_coverage: 5/5
+iac_coverage: 5/5
+joint_congruence: 5/5
+note: First-attempt clean with full CMK and 0 skips — honest needle-threading (enumerated-action key policy). Names aligned; app_probe 6/6. Extra list/delete endpoints beyond checklist. Behavioural check: [result of manual test].
