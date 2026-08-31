@@ -35,16 +35,24 @@ def repository_metadata() -> dict[str, str | bool]:
             text=True,
             check=True,
         ).stdout.strip()
-        dirty = bool(
-            subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.strip()
-        )
-        return {"commit": commit, "dirty": dirty}
+        porcelain = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+        # runs/ is version-controlled evidence, but a run's own files are
+        # necessarily untracked while it executes — they must not mark the
+        # SOURCE as dirty (P17).
+        meaningful = [
+            line
+            for line in porcelain
+            if line.strip()
+            and not line.startswith("?? runs/")
+            and not line.startswith('?? "runs/')
+        ]
+        return {"commit": commit, "dirty": bool(meaningful)}
     except (OSError, subprocess.CalledProcessError):
         return {"commit": "unavailable", "dirty": False}
 

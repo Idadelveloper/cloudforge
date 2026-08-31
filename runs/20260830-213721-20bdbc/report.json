@@ -1,0 +1,280 @@
+{
+  "run_id": "20260830-213721-20bdbc",
+  "timestamp": "2026-08-31T04:42:22.153814+00:00",
+  "started_at": "2026-08-31T04:37:21.195157+00:00",
+  "finished_at": "2026-08-31T04:42:22.153814+00:00",
+  "wall_seconds": 301.0,
+  "node_seconds_sum": 359.9,
+  "model": "claude-opus-5",
+  "status": "success",
+  "spec": "Build a REST API for personal notes. Users can create, list, fetch, update and delete notes. Each note has a title, body and timestamps. Notes are stored in DynamoDB.",
+  "benchmark_id": "S1-notes",
+  "tier": "simple",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "0034f9d46126cadc8aed47d7d6344262d905266926fe7211dd18c1db5d72f79b",
+    "complexity": {
+      "cloud_components": 1,
+      "aws_service_types": 1,
+      "api_operations": 5,
+      "domain_entities": 1,
+      "workflow_rules": 0,
+      "score": 7,
+      "rationale": "Single DynamoDB-backed entity with ordinary CRUD only."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for notes",
+      "POST endpoint creating a note",
+      "GET endpoint listing notes",
+      "GET endpoint fetching a single note",
+      "PUT/PATCH endpoint updating a note",
+      "DELETE endpoint removing a note",
+      "Note model has title, body and timestamps"
+    ]
+  },
+  "repository": {
+    "commit": "6d399b70af2f07b2a6f918a767b6d96246c7c9ec",
+    "dirty": true
+  },
+  "plan": {
+    "app_name": "personal_notes_api",
+    "summary": "A REST API for managing personal notes. Clients (a web/mobile front-end or HTTP client) perform full CRUD operations on notes; each note carries a title, body and created/updated timestamps. The FastAPI service persists notes directly in a DynamoDB table using the AWS SDK (boto3), with no asynchronous or event-driven processing required.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/notes",
+        "purpose": "Create a new note from a JSON body containing title and body; generates a UUID id and created_at/updated_at timestamps and stores the item in DynamoDB."
+      },
+      {
+        "method": "GET",
+        "path": "/notes",
+        "purpose": "List all notes for the caller, returning the DynamoDB scan/query results with optional limit and pagination cursor."
+      },
+      {
+        "method": "GET",
+        "path": "/notes/{note_id}",
+        "purpose": "Fetch a single note by its id; returns 404 if the item does not exist in DynamoDB."
+      },
+      {
+        "method": "PUT",
+        "path": "/notes/{note_id}",
+        "purpose": "Update the title and/or body of an existing note and refresh its updated_at timestamp."
+      },
+      {
+        "method": "DELETE",
+        "path": "/notes/{note_id}",
+        "purpose": "Delete a note by its id; returns 404 if the item does not exist."
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe used by the evaluation harness; confirms the service is up and the DynamoDB table is reachable."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Note",
+        "fields": [
+          "note_id: string (UUID, DynamoDB partition key)",
+          "title: string (required, 1-200 chars)",
+          "body: string (required, may be empty)",
+          "created_at: string (ISO-8601 UTC timestamp)",
+          "updated_at: string (ISO-8601 UTC timestamp)"
+        ]
+      },
+      {
+        "name": "NoteCreateRequest",
+        "fields": [
+          "title: string (required)",
+          "body: string (optional, defaults to empty string)"
+        ]
+      },
+      {
+        "name": "NoteUpdateRequest",
+        "fields": [
+          "title: string (optional)",
+          "body: string (optional)"
+        ]
+      },
+      {
+        "name": "NoteListResponse",
+        "fields": [
+          "items: list[Note]",
+          "next_cursor: string | null (opaque pagination token from DynamoDB LastEvaluatedKey)",
+          "count: integer"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "notes",
+        "justification": "Primary and only datastore required by the spec ('Notes are stored in DynamoDB'). Single table with partition key note_id (string), PAY_PER_REQUEST billing; every CRUD endpoint calls PutItem/GetItem/UpdateItem/DeleteItem/Scan against it."
+      },
+      {
+        "service": "IAM",
+        "name": "notes_api_service_role",
+        "justification": "Role plus least-privilege policy granting the notes service GetItem, PutItem, UpdateItem, DeleteItem, Query and Scan on the notes table only; documents the exact permissions the application code requires."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/personal-notes-api/application",
+        "justification": "Log group the FastAPI service writes structured request/error logs to, giving operators visibility into note CRUD failures. This is the only observability sink the application actually calls."
+      }
+    ],
+    "assumptions": [
+      "'Personal notes' is interpreted as a single-tenant/personal API: no authentication, user accounts or per-user partitioning are implemented, since the spec mentions none. Notes therefore live in one table keyed only by note_id.",
+      "Note ids are server-generated UUID4 strings returned in the create response, rather than client-supplied.",
+      "Timestamps are server-generated ISO-8601 UTC strings; created_at is immutable and updated_at is refreshed on every successful update.",
+      "PUT is treated as a partial update (only supplied fields change) because the spec says 'update' without specifying replace semantics; unknown fields are rejected.",
+      "Listing uses a DynamoDB Scan with a default page size of 50 and an opaque cursor, which is acceptable for personal-scale data volumes.",
+      "No asynchronous processing, notifications, file uploads or scheduled jobs are implied, so SQS, SNS, S3, Lambda and API Gateway are deliberately omitted; the service runs as its own process and calls DynamoDB directly.",
+      "Table name and AWS endpoint URL (for LocalStack) are supplied to the application via environment variables such as NOTES_TABLE_NAME and AWS_ENDPOINT_URL.",
+      "Responses are JSON; errors use standard HTTP status codes (400 validation, 404 missing note, 500 backend failure)."
+    ]
+  },
+  "max_iterations": 3,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_region.current: Reading...\ndata.aws_iam_policy_document.service_assume_role: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.service_assume_role: Read complete after 0s [id=2435368566]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.notes_api_service will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"notes_api_service\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"NotesTableCrud\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogWrites\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"kms:DescribeKey\",\n              + \"kms:Encrypt\",\n              + \"kms:GenerateDataKey\",\n              + \"kms:ReEncryptFrom\",\n              + \"kms:ReEncryptTo\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UseCmkForTableAndLogs\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.application will be created\n  + resource \"aws_cloudwatch_log_group\" \"application\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + kms_key_id        = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/personal-notes-api/application\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\" = \"/personal-notes-api/application\"\n        }\n      + tags_all          = {\n          + \"Name\"       = \"/personal-notes-api/application\"\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"personal-notes-api\"\n        }\n    }\n\n  # aws_dynamodb_table.notes will be created\n  + resource \"aws_dynamodb_table\" \"notes\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"note_id\"\n      + id               = (known after apply)\n      + name             = \"notes\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\" = \"notes\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"notes\"\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"personal-notes-api\"\n        }\n      + write_capacity   = (known after apply)\n\n      + attribute {\n          + name = \"note_id\"\n          + type = \"S\"\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl {\n          + enabled = false\n        }\n    }\n\n  # aws_iam_policy.notes_api_service will be created\n  + resource \"aws_iam_policy\" \"notes_api_service\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least-privilege access to the notes table, its CMK and the application log group\"\n      + id               = (known after apply)\n      + name             = \"notes_api_service_policy\"\n      + name_prefix      = (known after apply)\n      + path             = \"/\"\n      + policy           = (known after apply)\n      + policy_id        = (known after apply)\n      + tags             = {\n          + \"Name\" = \"notes_api_service_policy\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"notes_api_service_policy\"\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"personal-notes-api\"\n        }\n    }\n\n  # aws_iam_role.notes_api_service will be created\n  + resource \"aws_iam_role\" \"notes_api_service\" {\n      + arn                   = (known after apply)\n      + assume_role_policy    = jsonencode(\n            {\n              + Statement = [\n                  + {\n                      + Action    = \"sts:AssumeRole\"\n                      + Effect    = \"Allow\"\n                      + Principal = {\n                          + Service = \"ec2.amazonaws.com\"\n                        }\n                      + Sid       = \"AllowComputeServiceToAssumeRole\"\n                    },\n                ]\n              + Version   = \"2012-10-17\"\n            }\n        )\n      + create_date           = (known after apply)\n      + description           = \"Role used by the personal-notes-api FastAPI service to access DynamoDB and CloudWatch Logs\"\n      + force_detach_policies = false\n      + id                    = (known after apply)\n      + managed_policy_arns   = (known after apply)\n      + max_sessio"
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.29
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "............................                                             [100%]\n28 passed in 0.20s",
+      "duration_s": 1.38
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.12
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 13.05
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 41 passed, 0 failed, 0 skipped.",
+      "duration_s": 2.8
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_region.current: Reading...\ndata.aws_iam_policy_document.service_assume_role: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.service_assume_role: Read complete after 0s [id=2435368566]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.notes_api_service will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"notes_api_service\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"NotesTableCrud\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogWrites\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"kms:DescribeKey\",\n              + \"kms:Encrypt\",\n              + \"kms:GenerateDataKey\",\n              + \"kms:ReEncryptFrom\",\n              + \"kms:ReEncryptTo\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UseCmkForTableAndLogs\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.application will be created\n  + resource \"aws_cloudwatch_log_group\" \"application\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + kms_key_id        = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/personal-notes-api/application\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\" = \"/personal-notes-api/application\"\n        }\n      + tags_all          = {\n          + \"Name\"       = \"/personal-notes-api/application\"\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"personal-notes-api\"\n        }\n    }\n\n  # aws_dynamodb_table.notes will be created\n  + resource \"aws_dynamodb_table\" \"notes\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"note_id\"\n      + id               = (known after apply)\n      + name             = \"notes\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\" = \"notes\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"notes\"\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"personal-notes-api\"\n        }\n      + write_capacity   = (known after apply)\n\n      + attribute {\n          + name = \"note_id\"\n          + type = \"S\"\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl {\n          + enabled = false\n        }\n    }\n\n  # aws_iam_policy.notes_api_service will be created\n  + resource \"aws_iam_policy\" \"notes_api_service\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least-privilege access to the notes table, its CMK and the application log group\"\n      + id               = (known after apply)\n      + name             = \"notes_api_service_policy\"\n      + name_prefix      = (known after apply)\n      + path             = \"/\"\n      + policy           = (known after apply)\n      + policy_id        = (known after apply)\n      + tags             = {\n          + \"Name\" = \"notes_api_service_policy\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"notes_api_service_policy\"\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"personal-notes-api\"\n        }\n    }\n\n  # aws_iam_role.notes_api_service will be created\n  + resource \"aws_iam_role\" \"notes_api_service\" {\n      + arn                   = (known after apply)\n      + assume_role_policy    = jsonencode(\n            {\n              + Statement = [\n                  + {\n                      + Action    = \"sts:AssumeRole\"\n                      + Effect    = \"Allow\"\n                      + Principal = {\n                          + Service = \"ec2.amazonaws.com\"\n                        }\n                      + Sid       = \"AllowComputeServiceToAssumeRole\"\n                    },\n                ]\n              + Version   = \"2012-10-17\"\n            }\n        )\n      + create_date           = (known after apply)\n      + description           = \"Role used by the personal-notes-api FastAPI service to access DynamoDB and CloudWatch Logs\"\n      + force_detach_policies = false\n      + id                    = (known after apply)\n      + managed_policy_arns   = (known after apply)\n      + max_sessio",
+      "duration_s": 19.56
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 77,
+      "output_tokens": 1743,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 1872,
+      "output_tokens": 26845,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 1871,
+      "output_tokens": 5960,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 0.9033,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 21.7
+    },
+    {
+      "node": "generate_app",
+      "seconds": 243.7
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 57.3
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.8
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 15.8
+    },
+    {
+      "node": "deploy",
+      "seconds": 19.6
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 personal_notes_api (fastapi); AWS resources: DynamoDB:notes, IAM:notes_api_service_role, CloudWatch:/personal-notes-api/application",
+    "\ud83d\udc0d Generated application code (initial): 7 files \u2014 FastAPI notes service split into three decoupled modules: `app.py` (routes, dependency-injected repository, exception handlers mapping NoteNotFound->404, InvalidCursor->400, StorageError->500), `models.py` (pydantic v2 models with strict extra=forbid request bodies and partial-update validation), and `storage.py` (a `NotesRepository` interface with a boto3 DynamoDB implementation honouring `AWS_ENDPOINT_URL`/`AWS_DEFAULT_REGION`/`NOTES_TABLE_NAME` plus an in-memory implementation). All CRUD calls use PutItem/GetItem/UpdateItem (conditional, ALL_NEW)/DeleteItem/Scan with base64 opaque pagination cursors derived from LastEvaluatedKey; `/health` describes the table. Tests use `fastapi.testclient.TestClient` with an injected in-memory repo, a fake DynamoDB Table/client, and monkeypatched boto3.resource \u2014 entirely offline, no secrets, no debug literals, bind host from env defaulting to 127.0.0.1.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for personal_notes_api covering exactly the plan's aws_resources: (1) a DynamoDB table `notes` with partition key `note_id` (S), PAY_PER_REQUEST billing, point-in-time recovery and SSE using a customer managed KMS key; (2) a CloudWatch Logs group `/personal-notes-api/application` with 365-day retention and KMS encryption; (3) an IAM role `notes_api_service_role` plus a least-privilege policy granting GetItem/PutItem/UpdateItem/DeleteItem/Query/Scan/DescribeTable on the notes table ARN only, log stream writes scoped to the log group ARN, and KMS use scoped to the single CMK \u2014 no wildcard actions or resources. A rotated customer managed KMS key with an explicit key policy backs the encryption requirements for both the table and the log group (Checkov CKV_AWS_119 / CKV_AWS_158 / CKV_AWS_7). Files: versions.tf (terraform block pinning hashicorp/aws ~> 5.0), variables.tf (defaults matching plan resource names), main.tf (provider with project / managed-by default_tags plus all resources), outputs.tf (table name/ARN, log group, role and policy ARNs, KMS ARN for wiring NOTES_TABLE_NAME and friends). Only LocalStack-Community-supported services are used; no S3, SQS, SNS, Lambda or API Gateway were created since the plan explicitly omits them.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "models.py",
+    "storage.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}
