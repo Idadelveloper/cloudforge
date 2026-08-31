@@ -11,11 +11,38 @@
 # and Terraform. Congruence score = items satisfied / items expected.
 # Checklists are defined BEFORE running the pipeline, so they measure the
 # spec's intent, not the output.
+#
+# Each entry also has a Specification Complexity Profile (SCP). It is a
+# pre-run, descriptive measure rather than a claim of a universal complexity
+# scale. `score` = cloud_components + api_operations + domain_entities +
+# workflow_rules. `aws_service_types` is retained separately because two
+# specifications can use the same number of AWS services but have very
+# different workflow complexity. Tiers are assigned from the full profile and
+# the kind of workflow, not by score alone.
+
+complexity_measure:
+  name: Specification Complexity Profile
+  version: 1
+  score_formula: cloud_components + api_operations + domain_entities + workflow_rules
+  dimensions:
+    cloud_components: Logical cloud resources or managed components named by the specification.
+    aws_service_types: Distinct AWS service families named by the specification.
+    api_operations: Independently observable API behaviours required by the specification.
+    domain_entities: Persisted business entities that the application must model.
+    workflow_rules: Non-CRUD constraints, cross-cutting concerns, or multi-stage behaviours.
 
 specs:
   # ------------------------- SIMPLE (single store, plain CRUD) ------------
   - id: S1-notes
     tier: simple
+    complexity:
+      cloud_components: 1
+      aws_service_types: 1
+      api_operations: 5
+      domain_entities: 1
+      workflow_rules: 0
+      score: 7
+      rationale: Single DynamoDB-backed entity with ordinary CRUD only.
     spec: >
       Build a REST API for personal notes. Users can create, list, fetch,
       update and delete notes. Each note has a title, body and timestamps.
@@ -31,6 +58,14 @@ specs:
 
   - id: S2-todo
     tier: simple
+    complexity:
+      cloud_components: 1
+      aws_service_types: 1
+      api_operations: 4
+      domain_entities: 1
+      workflow_rules: 0
+      score: 6
+      rationale: Single DynamoDB-backed task entity with a small CRUD surface.
     spec: >
       Build a to-do list REST API. Users can add tasks, list tasks, mark a
       task as completed, and delete tasks. Each task has a description, a
@@ -45,6 +80,14 @@ specs:
 
   - id: S3-shortener
     tier: simple
+    complexity:
+      cloud_components: 1
+      aws_service_types: 1
+      api_operations: 3
+      domain_entities: 1
+      workflow_rules: 1
+      score: 6
+      rationale: One data store with redirect and counter behaviour beyond plain CRUD.
     spec: >
       Build a URL shortener API. Clients submit a long URL and receive a
       short code; visiting the short code redirects to the original URL and
@@ -59,6 +102,14 @@ specs:
 
   - id: S4-contact
     tier: simple
+    complexity:
+      cloud_components: 1
+      aws_service_types: 1
+      api_operations: 3
+      domain_entities: 1
+      workflow_rules: 0
+      score: 5
+      rationale: Single message store with create, list, and delete operations.
     spec: >
       Build a contact-form backend. Visitors submit messages with a name,
       email and message body; administrators can list all messages and
@@ -72,6 +123,14 @@ specs:
 
   - id: S5-inventory
     tier: simple
+    complexity:
+      cloud_components: 1
+      aws_service_types: 1
+      api_operations: 4
+      domain_entities: 1
+      workflow_rules: 1
+      score: 7
+      rationale: Single product store with a stateful stock-adjustment rule.
     spec: >
       Build an inventory REST API for a small shop. Staff can add products,
       list products, fetch one product, and adjust stock quantity up or
@@ -87,6 +146,14 @@ specs:
   # -------------------- MODERATE (2-3 services or auth) -------------------
   - id: M1-fileshare
     tier: moderate
+    complexity:
+      cloud_components: 2
+      aws_service_types: 2
+      api_operations: 4
+      domain_entities: 1
+      workflow_rules: 2
+      score: 9
+      rationale: Object storage and metadata store coupled through presigned transfer and usage aggregation.
     spec: >
       Build a file-sharing backend. Clients can upload files to S3 via
       presigned URLs, list their files, and delete them. File metadata
@@ -102,6 +169,14 @@ specs:
 
   - id: M2-bookmarks
     tier: moderate
+    complexity:
+      cloud_components: 2
+      aws_service_types: 2
+      api_operations: 3
+      domain_entities: 1
+      workflow_rules: 2
+      score: 8
+      rationale: Adds secret-backed API-key enforcement and tag filtering to a bookmark store.
     spec: >
       Build a bookmark manager API protected by an API key. The API key is
       stored in AWS Secrets Manager, and every request must present it in a
@@ -118,6 +193,14 @@ specs:
 
   - id: M3-gallery
     tier: moderate
+    complexity:
+      cloud_components: 2
+      aws_service_types: 2
+      api_operations: 5
+      domain_entities: 2
+      workflow_rules: 1
+      score: 10
+      rationale: Couples albums and image metadata with object storage and a presigned upload flow.
     spec: >
       Build an image-gallery backend. Images are stored in S3 and organised
       into albums whose metadata lives in DynamoDB. Users can create albums,
@@ -133,6 +216,14 @@ specs:
 
   - id: M4-registration
     tier: moderate
+    complexity:
+      cloud_components: 2
+      aws_service_types: 2
+      api_operations: 3
+      domain_entities: 2
+      workflow_rules: 2
+      score: 9
+      rationale: Adds a capacity invariant and asynchronous registration event to two related entities.
     spec: >
       Build an event-registration service. Organisers create events with a
       title, date and capacity; attendees register for an event until it is
@@ -149,6 +240,14 @@ specs:
 
   - id: M5-expenses
     tier: moderate
+    complexity:
+      cloud_components: 1
+      aws_service_types: 1
+      api_operations: 3
+      domain_entities: 1
+      workflow_rules: 2
+      score: 7
+      rationale: One store, but compound filtering and monthly aggregation make it more than basic CRUD.
     spec: >
       Build an expense-tracking API. Users record expenses with an amount,
       category and date, list expenses filtered by category or month, and
@@ -163,6 +262,14 @@ specs:
 
   - id: M6-feedback
     tier: moderate
+    complexity:
+      cloud_components: 2
+      aws_service_types: 2
+      api_operations: 3
+      domain_entities: 1
+      workflow_rules: 2
+      score: 8
+      rationale: Conditional low-rating notification and average calculation span storage and messaging.
     spec: >
       Build a product-feedback service. Customers submit feedback with a
       rating from 1 to 5 and a comment. Feedback is stored in DynamoDB, and
@@ -179,6 +286,14 @@ specs:
 
   - id: M7-documents
     tier: moderate
+    complexity:
+      cloud_components: 2
+      aws_service_types: 2
+      api_operations: 4
+      domain_entities: 2
+      workflow_rules: 3
+      score: 11
+      rationale: Versioning, tag search, and presigned retrieval coordinate document and version metadata.
     spec: >
       Build a document-store backend. Documents are uploaded to a versioned
       S3 bucket; their metadata (title, author, tags, version) is indexed
@@ -196,6 +311,14 @@ specs:
   # ------------- COMPLEX (3+ services, async workflows) -------------------
   - id: C1-orders
     tier: complex
+    complexity:
+      cloud_components: 3
+      aws_service_types: 3
+      api_operations: 3
+      domain_entities: 1
+      workflow_rules: 2
+      score: 9
+      rationale: A multi-service asynchronous order path combines persistence, queuing, and status notification.
     spec: >
       Build an order-processing service. A REST API accepts new orders and
       writes them to DynamoDB, then publishes an event to an SQS queue for
@@ -212,6 +335,14 @@ specs:
 
   - id: C2-jobs
     tier: complex
+    complexity:
+      cloud_components: 4
+      aws_service_types: 3
+      api_operations: 3
+      domain_entities: 1
+      workflow_rules: 3
+      score: 11
+      rationale: Queue-worker processing adds retry and dead-letter handling to an asynchronous job lifecycle.
     spec: >
       Build an asynchronous job-processing service. Clients submit
       compute jobs through a REST API; jobs are queued on SQS and processed
@@ -229,6 +360,14 @@ specs:
 
   - id: C3-notifications
     tier: complex
+    complexity:
+      cloud_components: 4
+      aws_service_types: 3
+      api_operations: 3
+      domain_entities: 1
+      workflow_rules: 3
+      score: 11
+      rationale: Topic-to-channel fan-out requires subscription management, routing, and delivery observation.
     spec: >
       Build a notification hub. Services publish events to a central SNS
       topic; subscribers register through a REST API choosing a channel
@@ -246,6 +385,14 @@ specs:
 
   - id: C4-blog
     tier: complex
+    complexity:
+      cloud_components: 3
+      aws_service_types: 3
+      api_operations: 5
+      domain_entities: 2
+      workflow_rules: 2
+      score: 12
+      rationale: Content, media, and queued moderation form a multi-stage publication workflow.
     spec: >
       Build a blog platform backend. Authors create posts with markdown
       bodies stored in DynamoDB and images stored in S3. Readers can list
@@ -264,6 +411,14 @@ specs:
 
   - id: C5-telemetry
     tier: complex
+    complexity:
+      cloud_components: 3
+      aws_service_types: 2
+      api_operations: 4
+      domain_entities: 2
+      workflow_rules: 2
+      score: 11
+      rationale: Per-device thresholds and daily aggregates coordinate two data entities with alerting.
     spec: >
       Build an IoT telemetry backend. Devices are registered in a DynamoDB
       device registry. Devices post temperature readings to an ingest
@@ -283,6 +438,14 @@ specs:
 
   - id: C6-loyalty
     tier: complex
+    complexity:
+      cloud_components: 4
+      aws_service_types: 4
+      api_operations: 3
+      domain_entities: 2
+      workflow_rules: 4
+      score: 13
+      rationale: Idempotent asynchronous accrual, tier notification, and audit logging span four services.
     spec: >
       Build a customer loyalty-points service. Customer accounts live in
       DynamoDB. Purchases are submitted to a REST API with an idempotency

@@ -176,16 +176,24 @@ def run_checkov(infra_dir: str, iteration: int, blocking: bool) -> ValidationRes
         reports = data if isinstance(data, list) else [data]
         failed_checks = []
         passed_count = 0
+        skipped_count = 0
         for report in reports:
             summary = report.get("summary", {})
             passed_count += summary.get("passed", 0)
+            skipped_count += summary.get("skipped", 0)
             for check in report.get("results", {}).get("failed_checks", []):
                 failed_checks.append(
                     f"{check.get('check_id')} {check.get('check_name')} "
                     f"on {check.get('resource')} ({check.get('file_path')})"
                 )
         failed = len(failed_checks)
-        lines = [f"Checkov: {passed_count} passed, {failed} failed."]
+        # Skips are usually the model exempting itself via inline
+        # `checkov:skip` comments — security-relevant evidence (RQ3), so
+        # they must stay visible in the recorded summary.
+        lines = [
+            f"Checkov: {passed_count} passed, {failed} failed, "
+            f"{skipped_count} skipped."
+        ]
         lines.extend(failed_checks[:40])
         summary_text = "\n".join(lines)
     except (json.JSONDecodeError, AttributeError, TypeError):

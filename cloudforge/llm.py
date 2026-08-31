@@ -1,7 +1,9 @@
 """Claude API wrapper for CloudForge.
 
 Uses the current Anthropic SDK surface:
-- claude-opus-4-8 by default (override with CLOUDFORGE_MODEL)
+- claude-opus-5 by default (override with CLOUDFORGE_MODEL); the July 2026
+  pilots ran claude-opus-4-8, which became a legacy model during the project
+  window, so the final campaign is frozen on the current Opus instead
 - adaptive thinking (`thinking={"type": "adaptive"}`)
 - streaming with `get_final_message()` so long generations don't hit HTTP
   timeouts
@@ -20,10 +22,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = os.environ.get("CLOUDFORGE_MODEL", "claude-opus-4-8")
+MODEL = os.environ.get("CLOUDFORGE_MODEL", "claude-opus-5")
 MAX_TOKENS = int(os.environ.get("CLOUDFORGE_MAX_TOKENS", "32000"))
 
-# Pricing per million tokens for cost metrics (claude-opus-4-8).
+# Pricing per million tokens for cost metrics. Verified 2026-08-30 against
+# the official model pages: claude-opus-5 and claude-opus-4-8 share the same
+# prices, so pilot and final-campaign cost estimates stay comparable.
 PRICE_PER_MTOK = {
     "input": 5.00,
     "output": 25.00,

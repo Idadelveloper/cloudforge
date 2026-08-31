@@ -5,16 +5,23 @@ real time, and inspect generated code alongside validation, deployment, and
 cost results (proposal section 3.2).
 """
 
+import csv
+import io
 import os
 import time
 import uuid
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
-import yaml
 from dotenv import load_dotenv
 
+from cloudforge.benchmark import (
+    benchmark_fingerprint,
+    evaluation_condition,
+    read_benchmark_specs,
+)
 from cloudforge.graph import build_graph
 from cloudforge.llm import MODEL, GenerationError, estimate_cost_usd
 from cloudforge.validators import LOCALSTACK_URL, localstack_running
@@ -23,20 +30,11 @@ load_dotenv()
 
 ROOT_DIR = Path(__file__).resolve().parent
 RUNS_DIR = ROOT_DIR / "runs"
-BENCHMARK_FILE = ROOT_DIR / "benchmark" / "specs.yaml"
 
 CUSTOM_OPTION = "— write your own specification —"
 SPEC_CHOICE_KEY = "spec_choice"
 SPEC_INPUT_KEY = "spec_input"
 CUSTOM_DRAFT_KEY = "custom_spec_draft"
-
-
-def read_benchmark_specs(path: Path = BENCHMARK_FILE) -> dict:
-    """Load the evaluation suite, keyed by benchmark id."""
-    if not path.exists():
-        return {}
-    data = yaml.safe_load(path.read_text()) or {}
-    return {entry["id"]: entry for entry in data.get("specs", [])}
 
 
 @st.cache_data
@@ -61,12 +59,19 @@ def summarize_selected_spec(entry: dict | None) -> dict[str, str | int]:
             "tier": "custom",
             "checklist_items": 0,
             "word_count": 0,
+            "complexity_score": 0,
+            "cloud_components": 0,
+            "api_operations": 0,
         }
+    profile = entry.get("complexity", {})
     return {
         "benchmark_id": entry["id"],
         "tier": entry["tier"],
         "checklist_items": len(entry.get("congruence_checklist", [])),
         "word_count": len(entry.get("spec", "").split()),
+        "complexity_score": profile.get("score", 0),
+        "cloud_components": profile.get("cloud_components", 0),
+        "api_operations": profile.get("api_operations", 0),
     }
 
 
@@ -84,8 +89,13 @@ def build_initial_state(
         "spec": spec.strip(),
         "run_id": run_id,
         "run_dir": str(run_dir),
+        "started_at": datetime.now(timezone.utc).isoformat(),
         "benchmark_id": selected["id"] if selected else "",
         "tier": selected["tier"] if selected else "",
+        "evaluation_condition": evaluation_condition(max_iterations),
+        "benchmark_complexity": dict(selected.get("complexity", {})) if selected else {},
+        "benchmark_checklist": list(selected.get("congruence_checklist", [])) if selected else [],
+        "benchmark_fingerprint": benchmark_fingerprint(selected),
         "max_iterations": max_iterations,
         "deploy_enabled": deploy_enabled,
         "checkov_blocking": checkov_blocking,
@@ -127,6 +137,25 @@ def render_theme() -> None:
             background:
                 linear-gradient(180deg, rgba(16, 44, 54, 0.97) 0%, rgba(22, 49, 61, 0.93) 100%);
             color: #f8f4ec;
+        }
+
+        /* The light base theme paints labels dark; the sidebar is dark navy,
+           so force its text and widget labels to stay light. */
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] .stMarkdown,
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] {
+            color: #f2ece0 !important;
+        }
+
+        /* Alerts (LocalStack status, API key status) sit on the dark sidebar:
+           give them a light card so their own dark text stays readable. */
+        [data-testid="stSidebar"] [data-testid="stAlert"] {
+            background: rgba(251, 247, 239, 0.95);
+            border-radius: 12px;
+        }
+        [data-testid="stSidebar"] [data-testid="stAlert"] p {
+            color: #16313d !important;
         }
 
         .cf-hero {
@@ -275,6 +304,9 @@ def render_selected_spec_panel(selected: dict | None) -> None:
             <div class="cf-note">
               <strong>{summary['benchmark_id']}</strong><br />
               Tier: <strong>{summary['tier']}</strong><br />
+              SCP score: <strong>{summary['complexity_score']}</strong><br />
+              Cloud components / API operations:
+              <strong>{summary['cloud_components']} / {summary['api_operations']}</strong><br />
               Expected congruence items: <strong>{summary['checklist_items']}</strong><br />
               Spec length: <strong>{summary['word_count']} words</strong>
             </div>
@@ -283,8 +315,9 @@ def render_selected_spec_panel(selected: dict | None) -> None:
         )
         if selected:
             st.caption(
-                "Use `max_iterations = 0` for the zero-shot baseline, then rerun the same "
-                "specification with the full retry budget for the corrected condition."
+                "The pre-run Specification Complexity Profile is saved in `report.json`. "
+                "Use the evaluation run plan to decide whether this pair starts with the baseline "
+                "or bounded-correction condition."
             )
         else:
             st.caption(
@@ -308,8 +341,150 @@ def render_selected_spec_panel(selected: dict | None) -> None:
             )
 
 
+def render_plan(plan: dict) -> None:
+    """Readable rendering of the shared plan, the pipeline's core mechanism."""
+    if not plan:
+        st.info("No plan recorded.")
+        return
+    st.markdown(
+        f"**{plan.get('app_name', 'unnamed')}** · framework: `{plan.get('framework', '?')}`"
+    )
+    if plan.get("summary"):
+        st.caption(plan["summary"])
+    endpoints = plan.get("endpoints", [])
+    if endpoints:
+        st.markdown("**Endpoints**")
+        st.table(
+            [
+                {
+                    "method": e.get("method", ""),
+                    "path": e.get("path", ""),
+                    "purpose": e.get("purpose", ""),
+                }
+                for e in endpoints
+            ]
+        )
+    models = plan.get("data_models", [])
+    if models:
+        st.markdown("**Data models**")
+        st.table(
+            [
+                {"name": m.get("name", ""), "fields": ", ".join(m.get("fields", []))}
+                for m in models
+            ]
+        )
+    resources = plan.get("aws_resources", [])
+    if resources:
+        st.markdown("**AWS resources** (every resource must trace to a feature)")
+        st.table(
+            [
+                {
+                    "service": r.get("service", ""),
+                    "name": r.get("name", ""),
+                    "justification": r.get("justification", ""),
+                }
+                for r in resources
+            ]
+        )
+    assumptions = plan.get("assumptions", [])
+    if assumptions:
+        st.markdown("**Recorded assumptions**")
+        for assumption in assumptions:
+            st.markdown(f"- {assumption}")
+    with st.expander("Raw plan JSON"):
+        st.json(plan)
+
+
+def congruence_rows(checklist: list[str], run_id: str) -> list[dict]:
+    """Collect the three manual judgments per pre-registered checklist item."""
+    rows = []
+    for idx, item in enumerate(checklist):
+        text_col, app_col, iac_col, joint_col = st.columns([6, 1, 1, 1.2])
+        text_col.markdown(f"{idx + 1}. {item}")
+        rows.append(
+            {
+                "item_index": idx + 1,
+                "item": item,
+                "app_present": app_col.checkbox(
+                    "App", key=f"cg-{run_id}-{idx}-app",
+                    help="The generated application implements this capability.",
+                ),
+                "iac_present": iac_col.checkbox(
+                    "IaC", key=f"cg-{run_id}-{idx}-iac",
+                    help="The generated Terraform provisions or supports it.",
+                ),
+                "joint_congruent": joint_col.checkbox(
+                    "Joint", key=f"cg-{run_id}-{idx}-joint",
+                    help="Both sides are present with architecturally compatible roles.",
+                ),
+            }
+        )
+    return rows
+
+
+def render_congruence_scoring(final_state: dict, run_id: str) -> None:
+    """Manual scoring aid for the evaluation guide's congruence procedure."""
+    checklist = final_state.get("benchmark_checklist", [])
+    if not checklist:
+        st.info(
+            "Custom specification — no pre-registered checklist to score. "
+            "Benchmark runs show the scoring panel here."
+        )
+        return
+    st.caption(
+        "Score every pre-registered item against the generated artifacts, then save. "
+        "Joint congruence requires both sides present **and** architecturally compatible; "
+        "static or deployment success alone does not prove it."
+    )
+    rows = congruence_rows(checklist, run_id)
+    n = len(rows)
+    app_n = sum(r["app_present"] for r in rows)
+    iac_n = sum(r["iac_present"] for r in rows)
+    joint_n = sum(r["joint_congruent"] for r in rows)
+    inconsistent = [
+        r["item_index"]
+        for r in rows
+        if r["joint_congruent"] and not (r["app_present"] and r["iac_present"])
+    ]
+    col1, col2, col3 = st.columns(3)
+    col1.metric("App coverage", f"{app_n} / {n}")
+    col2.metric("IaC coverage", f"{iac_n} / {n}")
+    col3.metric("Joint congruence", f"{joint_n} / {n}")
+    if inconsistent:
+        st.warning(
+            f"Item(s) {inconsistent} are marked Joint without both App and IaC — "
+            "joint congruence requires both sides."
+        )
+    note = st.text_area(
+        "Evidence / divergence note (file names, resource names, mismatches)",
+        key=f"cg-{run_id}-note",
+        placeholder="e.g. app is a standalone FastAPI server but Terraform provisions API Gateway + Lambda",
+    )
+    if st.button("💾 Save scores to run directory", key=f"cg-{run_id}-save"):
+        buffer = io.StringIO()
+        writer = csv.DictWriter(
+            buffer,
+            fieldnames=["item_index", "item", "app_present", "iac_present", "joint_congruent"],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+        run_dir = RUNS_DIR / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "congruence.csv").write_text(buffer.getvalue())
+        summary = (
+            f"run_id: {run_id}\n"
+            f"app_coverage: {app_n}/{n}\niac_coverage: {iac_n}/{n}\n"
+            f"joint_congruence: {joint_n}/{n}\nnote: {note.strip()}\n"
+        )
+        (run_dir / "congruence_summary.txt").write_text(summary)
+        st.success(
+            f"Saved to `runs/{run_id}/congruence.csv`. Copy the three fractions and the "
+            "note into the master evaluation log."
+        )
+
+
 def render_results(final_state: dict, max_iterations: int, run_id: str) -> None:
-    tab_plan, tab_app, tab_iac, tab_val, tab_deploy, tab_metrics = st.tabs(
+    tab_plan, tab_app, tab_iac, tab_val, tab_deploy, tab_metrics, tab_score = st.tabs(
         [
             "📋 Plan",
             "🐍 App code",
@@ -317,11 +492,12 @@ def render_results(final_state: dict, max_iterations: int, run_id: str) -> None:
             "🔎 Validation",
             "🚀 Deployment",
             "📊 Metrics",
+            "✅ Congruence scoring",
         ]
     )
 
     with tab_plan:
-        st.json(final_state.get("plan", {}))
+        render_plan(final_state.get("plan", {}))
 
     with tab_app:
         for generated_file in final_state.get("app_files", []):
@@ -397,6 +573,18 @@ def render_results(final_state: dict, max_iterations: int, run_id: str) -> None:
         if timings:
             st.subheader("Stage timings")
             st.dataframe(timings, use_container_width=True)
+        report_path = RUNS_DIR / run_id / "report.json"
+        if report_path.exists():
+            st.download_button(
+                "⬇️ Download report.json",
+                report_path.read_bytes(),
+                file_name=f"{run_id}-report.json",
+                mime="application/json",
+                key=f"dl-{run_id}",
+            )
+
+    with tab_score:
+        render_congruence_scoring(final_state, run_id)
 
     st.info(
         f"📁 All artifacts and `report.json` were saved to `runs/{run_id}/` for the "
@@ -469,54 +657,67 @@ def render_app() -> None:
         disabled=not spec.strip(),
     )
 
-    if not run_clicked:
-        return
-
-    run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
-    run_dir = RUNS_DIR / run_id
-    initial_state = build_initial_state(
-        spec,
-        run_id,
-        run_dir,
-        max_iterations,
-        deploy_enabled,
-        checkov_blocking,
-        selected,
-    )
-
-    graph = get_graph()
-    final_state = None
-    shown_events = 0
-    started = time.time()
-
-    with st.status("Running the CloudForge pipeline…", expanded=True) as status_box:
-        try:
-            for state_snapshot in graph.stream(
-                initial_state,
-                config={"recursion_limit": 60},
-                stream_mode="values",
-            ):
-                final_state = state_snapshot
-                events = state_snapshot.get("events", [])
-                for event in events[shown_events:]:
-                    st.write(event)
-                shown_events = len(events)
-        except GenerationError as exc:
-            status_box.update(label="Pipeline error", state="error")
-            st.error(str(exc))
-            st.stop()
-
-        succeeded = final_state.get("status") == "success"
-        status_box.update(
-            label=(
-                f"Pipeline finished in {time.time() - started:.0f}s — "
-                f"{'success ✅' if succeeded else 'failed ❌'}"
-            ),
-            state="complete" if succeeded else "error",
-            expanded=False,
+    if run_clicked:
+        run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        run_dir = RUNS_DIR / run_id
+        initial_state = build_initial_state(
+            spec,
+            run_id,
+            run_dir,
+            max_iterations,
+            deploy_enabled,
+            checkov_blocking,
+            selected,
         )
 
-    render_results(final_state, max_iterations, run_id)
+        graph = get_graph()
+        final_state = None
+        shown_events = 0
+        started = time.time()
+
+        with st.status("Running the CloudForge pipeline…", expanded=True) as status_box:
+            try:
+                for state_snapshot in graph.stream(
+                    initial_state,
+                    config={"recursion_limit": 60},
+                    stream_mode="values",
+                ):
+                    final_state = state_snapshot
+                    events = state_snapshot.get("events", [])
+                    for event in events[shown_events:]:
+                        st.write(event)
+                    shown_events = len(events)
+            except GenerationError as exc:
+                status_box.update(label="Pipeline error", state="error")
+                st.error(str(exc))
+                st.stop()
+
+            succeeded = final_state.get("status") == "success"
+            status_box.update(
+                label=(
+                    f"Pipeline finished in {time.time() - started:.0f}s — "
+                    f"{'success ✅' if succeeded else 'failed ❌'}"
+                ),
+                state="complete" if succeeded else "error",
+                expanded=False,
+            )
+
+        # Persist so results (and the scoring panel) survive widget reruns.
+        st.session_state["last_run"] = {
+            "final_state": final_state,
+            "max_iterations": max_iterations,
+            "run_id": run_id,
+        }
+
+    last_run = st.session_state.get("last_run")
+    if not last_run:
+        return
+
+    if not run_clicked:
+        st.caption(f"Showing results for run `{last_run['run_id']}`.")
+    render_results(
+        last_run["final_state"], last_run["max_iterations"], last_run["run_id"]
+    )
 
 
 if __name__ == "__main__":

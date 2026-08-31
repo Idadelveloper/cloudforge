@@ -1,6 +1,7 @@
 # Direct project dependencies only.
-# Verified against upstream package indexes and vendor docs on 2026-08-30.
-anthropic==1.1.0
+# Verified against upstream package indexes and vendor docs on 2026-08-30
+# (second pass, evening: anthropic 1.2.0 released 2026-08-27 superseded 1.1.0).
+anthropic==1.2.0
 bandit==1.9.4
 boto3==1.43.83
 fastapi==0.141.1

@@ -1,2 +1,2 @@
 # Install this file into .venv-checkov, not the main project environment.
-checkov==3.3.15
+checkov==3.3.16

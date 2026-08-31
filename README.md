@@ -23,7 +23,8 @@ documentation on **August 30, 2026**:
 
 | Component | Version |
 |---|---|
-| Anthropic Python SDK | `1.1.0` |
+| Anthropic Python SDK | `1.2.0` |
+| Generation model | `claude-opus-5` (override with `CLOUDFORGE_MODEL`) |
 | LangGraph | `1.2.11` |
 | Streamlit | `1.62.0` |
 | Flask | `3.1.3` |
@@ -32,9 +33,13 @@ documentation on **August 30, 2026**:
 | pytest | `9.1.1` |
 | flake8 | `7.3.0` |
 | Bandit | `1.9.4` |
-| Checkov | `3.3.15` |
+| Checkov | `3.3.16` (isolated in `.venv-checkov`) |
 | terraform-local (`tflocal`) | `0.26.0` |
 | LocalStack image | `localstack/localstack:4.6` |
+
+The July 2026 pilot runs used `claude-opus-4-8`; that model became a legacy
+release during the project window, so the evaluation campaign is frozen on
+`claude-opus-5` (same pricing, documented in the problems log).
 
 ## Prerequisites
 
@@ -61,10 +66,11 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Create the isolated Checkov environment:
+Create the isolated Checkov environment (from the main venv's interpreter, so
+the two environments can never disagree about which Python they use):
 
 ```bash
-python3.13 -m venv .venv-checkov
+.venv/bin/python -m venv .venv-checkov
 .venv-checkov/bin/python -m pip install --upgrade pip
 .venv-checkov/bin/python -m pip install -r requirements-checkov.txt
 ```
@@ -72,6 +78,12 @@ python3.13 -m venv .venv-checkov
 Checkov is isolated on purpose. `terraform-local` depends on `python-hcl2`,
 while Checkov depends on `bc-python-hcl2`, and both expose the `hcl2` module.
 Keeping them in separate virtual environments avoids import collisions.
+
+> Troubleshooting: if `.venv-checkov/bin/checkov --version` crashes with a
+> stdlib import error (for example `No module named '_posixsubprocess'`), the
+> venv's interpreter symlinks have drifted after a system Python upgrade.
+> Delete `.venv-checkov` and recreate it with the two commands above — always
+> from the same interpreter as the main `.venv`.
 
 Add your API key:
 
@@ -95,6 +107,38 @@ After that, reuse it with `docker start cloudforge-localstack` and stop it with
 > Do not use `localstack start -d`. The current LocalStack CLI flow is account
 > oriented, while this project is pinned to a direct Docker-based Community
 > image setup for reproducible local evaluation.
+
+### Troubleshooting: Docker commands hang / "LocalStack not reachable"
+
+Docker Desktop's backend can enter a wedged state where its processes are
+running but the engine socket answers nothing — then **every** `docker`
+command (`docker info`, `docker ps`, `docker start …`) blocks forever
+(problems log P5, P13). `start.sh` and the reset script now detect this with
+a timeout-guarded probe and print the fix instead of hanging. To check and
+repair manually:
+
+```bash
+curl -s --max-time 3 --unix-socket ~/.docker/run/docker.sock http://localhost/_ping
+```
+
+`OK` means the engine is fine. No output means it is wedged; restart it:
+
+```bash
+pkill -f com.docker.backend && open -a Docker
+```
+
+Wait ~20 seconds, then rerun `./start.sh`. Three more notes:
+
+- A nearly full startup disk can wedge the engine or stop it from booting at
+  all. Keep several GB free during evaluation; `docker image prune -a -f`
+  reclaims images no container uses (LocalStack's Lambda runtime images,
+  `public.ecr.aws/lambda/python:*`, are kept while the container exists —
+  leave them, Lambda specs need them).
+- The very first `./start.sh` or reset on a machine pulls the ~1.9 GB
+  LocalStack image; the scripts show pull progress instead of silence.
+- If the app's sidebar still reports LocalStack unreachable, check
+  `curl -s http://localhost:4566/_localstack/health` and
+  `docker logs --tail 20 cloudforge-localstack`.
 
 ## Run the app
 
@@ -127,10 +171,11 @@ Run the repository checks from the project root:
 
 For dissertation evaluation runs:
 
-1. Start with a benchmark spec and set `max_iterations = 0` for the zero-shot baseline.
-2. Rerun the same spec with `max_iterations = 3` for the bounded correction condition.
-3. Record whether validation passes, whether LocalStack deployment passes, and how the generated app and Terraform match the benchmark checklist.
-4. Use `.venv/bin/python scripts/complexity_metrics.py` to summarise completed run folders.
+1. Follow `dissertation/EVALUATION_AND_TESTING_GUIDE.md` and its 36-trial plan rather than choosing an ad-hoc order.
+2. Reset the disposable LocalStack container before each primary trial with `./scripts/reset_localstack.sh --confirm`.
+3. Run the planned baseline (`max_iterations = 0`) or bounded-correction (`max_iterations = 3`) condition without editing the benchmark prompt.
+4. Record the automated report fields, then score app coverage, IaC coverage, and joint congruence in the UI's "Congruence scoring" tab — it saves `congruence.csv` beside the run's `report.json`.
+5. Use `.venv/bin/python scripts/complexity_metrics.py --catalogue` for the pre-run complexity table and the default command for completed-run outcomes.
 
 ## Project layout
 
@@ -146,9 +191,11 @@ cloudforge/
   state.py              Shared typed state
   validators.py         Validation and deployment tool wrappers
 scripts/
-  complexity_metrics.py Run-summary helper
+  complexity_metrics.py Pre-run catalogue and run-summary helper
+  reset_localstack.sh   Guarded clean-emulator reset for evaluation trials
 tests/                  Repository-level tests
 runs/                   Generated artifacts and reports
+dissertation/           Evaluation protocol, logs, and chapter materials
 ```
 
 CloudForge is an experimental research artifact. Generated output can pass

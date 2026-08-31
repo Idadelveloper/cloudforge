@@ -53,11 +53,19 @@ def test_summarize_selected_spec_reports_custom_defaults() -> None:
         "tier": "custom",
         "checklist_items": 0,
         "word_count": 0,
+        "complexity_score": 0,
+        "cloud_components": 0,
+        "api_operations": 0,
     }
 
 
 def test_build_initial_state_carries_benchmark_metadata(tmp_path: Path) -> None:
-    selected = {"id": "S3-shortener", "tier": "simple"}
+    selected = {
+        "id": "S3-shortener",
+        "tier": "simple",
+        "complexity": {"score": 6},
+        "congruence_checklist": ["URL mapping table"],
+    }
 
     state = build_initial_state(
         spec="Build a URL shortener",
@@ -72,4 +80,8 @@ def test_build_initial_state_carries_benchmark_metadata(tmp_path: Path) -> None:
     assert state["spec"] == "Build a URL shortener"
     assert state["benchmark_id"] == "S3-shortener"
     assert state["tier"] == "simple"
+    assert state["evaluation_condition"] == "bounded_correction"
+    assert state["benchmark_complexity"] == {"score": 6}
+    assert state["benchmark_checklist"] == ["URL mapping table"]
+    assert len(state["benchmark_fingerprint"]) == 64
     assert state["checkov_blocking"] is False

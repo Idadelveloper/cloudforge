@@ -12,3 +12,7 @@ firebase-debug.log
 .terraform/
 *.tfstate*
 dissertation/
+.agents/
+.claude/
+.streamlit/
+dissertation

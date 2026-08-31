@@ -28,8 +28,13 @@ class CloudForgeState(TypedDict, total=False):
     spec: str
     run_id: str
     run_dir: str
+    started_at: str  # ISO-8601 UTC; lets the report record true wall-clock time
     benchmark_id: str  # id from benchmark/specs.yaml ("" for ad-hoc specs)
     tier: str  # simple | moderate | complex | ""
+    evaluation_condition: str  # baseline | bounded_correction | exploratory_*
+    benchmark_complexity: dict[str, Any]  # pre-run Specification Complexity Profile
+    benchmark_checklist: list[str]  # pre-registered manual congruence items
+    benchmark_fingerprint: str  # SHA-256 of the evaluation-relevant benchmark fields
     max_iterations: int  # bounded self-correction (proposal O2: max 3)
     deploy_enabled: bool
     checkov_blocking: bool  # treat Checkov failures as gating vs advisory

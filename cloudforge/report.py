@@ -9,6 +9,7 @@ review rather than auto-tagged.
 """
 
 import json
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,33 @@ HALLUCINATION_MARKERS = (
     "Could not find a version that satisfies",
     "Failed to query available provider packages",
 )
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def repository_metadata() -> dict[str, str | bool]:
+    """Capture the source revision that produced a run without blocking finalisation."""
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+        return {"commit": commit, "dirty": dirty}
+    except (OSError, subprocess.CalledProcessError):
+        return {"commit": "unavailable", "dirty": False}
+
+
 SCHEMA_MARKERS = (
     "Unsupported argument",
     "Unsupported block type",
@@ -53,6 +81,17 @@ def write_report(state: CloudForgeState, status: str) -> str:
     run_dir = Path(state["run_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    finished_at = datetime.now(timezone.utc)
+    started_at = state.get("started_at", "")
+    wall_seconds = None
+    if started_at:
+        try:
+            wall_seconds = round(
+                (finished_at - datetime.fromisoformat(started_at)).total_seconds(), 1
+            )
+        except ValueError:
+            wall_seconds = None
+
     validations = state.get("validations", [])
     failures = [v for v in validations if not v["passed"]]
     per_iteration: dict[int, dict] = {}
@@ -62,14 +101,31 @@ def write_report(state: CloudForgeState, status: str) -> str:
         )
         entry["passed" if v["passed"] else "failed"] += 1
 
+    timings = state.get("timings", [])
     report = {
         "run_id": state["run_id"],
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": finished_at.isoformat(),
+        "started_at": started_at,
+        "finished_at": finished_at.isoformat(),
+        # True elapsed time per specification (RQ4). The per-node sum
+        # double-counts the parallel generate/validate supersteps, so it is
+        # recorded separately and must not be reported as duration.
+        "wall_seconds": wall_seconds,
+        "node_seconds_sum": round(
+            sum(entry.get("seconds", 0) for entry in timings), 1
+        ),
         "model": MODEL,
         "status": status,
         "spec": state["spec"],
         "benchmark_id": state.get("benchmark_id", ""),
         "tier": state.get("tier", ""),
+        "evaluation_condition": state.get("evaluation_condition", "custom"),
+        "benchmark": {
+            "fingerprint": state.get("benchmark_fingerprint", ""),
+            "complexity": state.get("benchmark_complexity", {}),
+            "congruence_checklist": state.get("benchmark_checklist", []),
+        },
+        "repository": repository_metadata(),
         "plan": state.get("plan"),
         "max_iterations": state.get("max_iterations"),
         "iterations_used": state.get("iteration", 0),
