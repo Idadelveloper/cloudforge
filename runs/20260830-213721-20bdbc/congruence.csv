@@ -1,0 +1,8 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,DynamoDB table for notes,True,True,True
+2,POST endpoint creating a note,True,True,True
+3,GET endpoint listing notes,True,True,True
+4,GET endpoint fetching a single note,True,True,True
+5,PUT/PATCH endpoint updating a note,True,True,True
+6,DELETE endpoint removing a note,True,True,True
+7,"Note model has title, body and timestamps",True,True,True

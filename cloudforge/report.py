@@ -42,16 +42,18 @@ def repository_metadata() -> dict[str, str | bool]:
             text=True,
             check=True,
         ).stdout.splitlines()
-        # runs/ is version-controlled evidence, but a run's own files are
-        # necessarily untracked while it executes — they must not mark the
-        # SOURCE as dirty (P17).
-        meaningful = [
-            line
-            for line in porcelain
-            if line.strip()
-            and not line.startswith("?? runs/")
-            and not line.startswith('?? "runs/')
-        ]
+        # runs/ is version-controlled evidence: a run's own files are
+        # untracked while it executes, and manual scoring edits tracked
+        # evidence between commits. Neither changes the SOURCE, so anything
+        # under runs/ is excluded from the dirty computation (P17).
+        meaningful = []
+        for line in porcelain:
+            if not line.strip():
+                continue
+            path = line[3:] if len(line) > 3 else ""
+            if path.startswith("runs/") or path.startswith('"runs/'):
+                continue
+            meaningful.append(line)
         return {"commit": commit, "dirty": bool(meaningful)}
     except (OSError, subprocess.CalledProcessError):
         return {"commit": "unavailable", "dirty": False}

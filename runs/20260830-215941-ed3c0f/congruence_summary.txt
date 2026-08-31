@@ -1,0 +1,5 @@
+run_id: 20260830-215941-ed3c0f
+app_coverage: 7/7
+iac_coverage: 1/7
+joint_congruence: 0/7
+note: ailed checkov gate: 3 KMS key-policy findings (CKV_AWS_111/356/109); no deploy, no probes.
