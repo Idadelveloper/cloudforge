@@ -62,7 +62,9 @@ def _aws_env() -> dict:
     return env
 
 
-def _run(cmd: list[str], cwd: str, timeout: int = 300) -> tuple[int, str, float]:
+def _run(
+    cmd: list[str], cwd: str, timeout: int = 300, max_chars: int = MAX_OUTPUT_CHARS
+) -> tuple[int, str, float]:
     TF_PLUGIN_CACHE.mkdir(exist_ok=True)
     start = time.time()
     try:
@@ -75,7 +77,7 @@ def _run(cmd: list[str], cwd: str, timeout: int = 300) -> tuple[int, str, float]
             env=_aws_env(),
         )
         output = (proc.stdout + "\n" + proc.stderr).strip()
-        return proc.returncode, output[:MAX_OUTPUT_CHARS], time.time() - start
+        return proc.returncode, output[:max_chars], time.time() - start
     except subprocess.TimeoutExpired:
         return 124, f"{cmd[0]} timed out after {timeout}s", time.time() - start
     except FileNotFoundError:
@@ -154,6 +156,10 @@ def run_terraform_validate(infra_dir: str, iteration: int) -> ValidationResult:
 
 
 def run_checkov(infra_dir: str, iteration: int, blocking: bool) -> ValidationResult:
+    # Checkov's JSON must be parsed IN FULL: truncating it first breaks
+    # json.loads, which the tool-error path then misreads as a crash and
+    # silently un-gates security (problems log P15). The stored summary is
+    # still capped below; only the parse input gets the high ceiling.
     rc, out, dt = _run(
         [
             _checkov_bin(),
@@ -168,6 +174,7 @@ def run_checkov(infra_dir: str, iteration: int, blocking: bool) -> ValidationRes
         ],
         cwd=infra_dir,
         timeout=600,
+        max_chars=2_000_000,
     )
     summary_text = out
     failed = None

@@ -39,6 +39,12 @@ prefer FastAPI for JSON APIs unless the spec says otherwise).
 - Infrastructure must be deployable to LocalStack Community Edition, so only \
 plan these AWS services: S3, DynamoDB, SQS, SNS, Lambda, API Gateway, IAM, \
 CloudWatch, Secrets Manager. Use DynamoDB instead of RDS for storage.
+- The generated backend runs as its own service (started by the evaluation \
+harness) and talks to the AWS resources directly; it is NOT hosted inside \
+Lambda. Plan Lambda and API Gateway only when the specification itself \
+requires cloud-side execution — an asynchronous queue worker, scheduled or \
+event-driven processing — never as generic hosting for a REST API. Every \
+planned resource must be something the application code will actually call.
 """
 
 PLAN_SCHEMA = {
