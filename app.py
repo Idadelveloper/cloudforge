@@ -25,7 +25,7 @@ from cloudforge.benchmark import (
     read_benchmark_specs,
 )
 from cloudforge.graph import build_graph
-from cloudforge.llm import MODEL, GenerationError, estimate_cost_usd
+from cloudforge.llm import MAX_TOKENS, MODEL, GenerationError, estimate_cost_usd
 from cloudforge.validators import LOCALSTACK_URL, localstack_running
 
 load_dotenv()
@@ -648,6 +648,7 @@ def render_app() -> None:
     with st.sidebar:
         st.header("Configuration")
         st.markdown(f"**Model:** `{MODEL}`")
+        st.markdown(f"**Max output tokens:** `{MAX_TOKENS:,}`")
 
         api_key_ok = bool(os.environ.get("ANTHROPIC_API_KEY"))
         if api_key_ok:

@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+boto3
+pydantic
+# test-only dependency required by fastapi.testclient (starlette TestClient)
+httpx
