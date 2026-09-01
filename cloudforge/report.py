@@ -13,7 +13,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .llm import MODEL, estimate_cost_usd
+from .llm import MAX_TOKENS, MODEL, estimate_cost_usd
 from .state import CloudForgeState, ValidationResult
 
 HALLUCINATION_MARKERS = (
@@ -125,6 +125,7 @@ def write_report(state: CloudForgeState, status: str) -> str:
             sum(entry.get("seconds", 0) for entry in timings), 1
         ),
         "model": MODEL,
+        "max_output_tokens": MAX_TOKENS,
         "status": status,
         "spec": state["spec"],
         "benchmark_id": state.get("benchmark_id", ""),

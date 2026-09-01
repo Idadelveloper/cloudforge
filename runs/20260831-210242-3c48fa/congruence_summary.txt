@@ -1,0 +1,5 @@
+run_id: 20260831-210242-3c48fa
+app_coverage: 5/5
+iac_coverage: 5/5
+joint_congruence: 5/5
+note: loop repaired KMS trio in 2 iterations (CKV2_AWS_64 epicycle), 0 skips; dev-fallback admin token 'cloudforge-admin' hardcoded (security observation); field named 'message' vs checklist's 'body' (cosmetic); probe re-run after emulator outage: 5/5.

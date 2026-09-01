@@ -23,7 +23,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MODEL = os.environ.get("CLOUDFORGE_MODEL", "claude-opus-5")
-MAX_TOKENS = int(os.environ.get("CLOUDFORGE_MAX_TOKENS", "32000"))
+# 64000 since P20: S5-inventory's app generation exceeded the original 32000
+# cap (a truncated call bills fully but yields nothing usable). Opus 5
+# supports 128K output; completed runs never came close to the new ceiling.
+MAX_TOKENS = int(os.environ.get("CLOUDFORGE_MAX_TOKENS", "64000"))
 
 # Pricing per million tokens for cost metrics. Verified 2026-08-30 against
 # the official model pages: claude-opus-5 and claude-opus-4-8 share the same
