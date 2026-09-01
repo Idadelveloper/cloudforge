@@ -1,0 +1,365 @@
+{
+  "run_id": "20260901-094344-60fa12",
+  "timestamp": "2026-09-01T16:52:47.711331+00:00",
+  "started_at": "2026-09-01T16:43:44.313318+00:00",
+  "finished_at": "2026-09-01T16:52:47.711331+00:00",
+  "wall_seconds": 543.4,
+  "node_seconds_sum": 968.4,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "failed",
+  "spec": "Build an asynchronous job-processing service. Clients submit compute jobs through a REST API; jobs are queued on SQS and processed by a Lambda worker that writes results to DynamoDB. Clients can poll a status endpoint and fetch results when a job completes. Failed jobs are retried once and then routed to a dead-letter queue.",
+  "benchmark_id": "C2-jobs",
+  "tier": "complex",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "2573e8c9aaa3935214f1215e9758e78ef3b8affefd4a99e5eba5695b1ad66797",
+    "complexity": {
+      "cloud_components": 4,
+      "aws_service_types": 3,
+      "api_operations": 3,
+      "domain_entities": 1,
+      "workflow_rules": 3,
+      "score": 11,
+      "rationale": "Queue-worker processing adds retry and dead-letter handling to an asynchronous job lifecycle."
+    },
+    "congruence_checklist": [
+      "SQS queue for submitted jobs",
+      "Lambda worker consuming the queue",
+      "DynamoDB table for job status and results",
+      "Dead-letter queue for failed jobs",
+      "POST endpoint submitting a job",
+      "GET endpoint polling job status",
+      "GET endpoint fetching results"
+    ]
+  },
+  "repository": {
+    "commit": "7373b0431c085bb95a457c3760f90412ede0c62e",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "async_job_processor",
+    "summary": "An asynchronous compute-job processing service. Clients submit jobs via a FastAPI REST API; the API persists a job record in DynamoDB with status QUEUED and enqueues the job payload on an SQS queue. A Lambda worker consumes the queue, executes the compute job, and writes results and terminal status back to DynamoDB. Failed messages are retried once (maxReceiveCount 2) before being routed to an SQS dead-letter queue. Clients poll a status endpoint and retrieve results once the job reaches SUCCEEDED, and may inspect dead-lettered jobs. Job records and large result payloads are stored in DynamoDB, with oversized results offloaded to S3.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/jobs",
+        "purpose": "Submit a new compute job: validate payload, create a DynamoDB job record with status QUEUED, send a message to the SQS jobs queue, return job_id and status."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs/{job_id}",
+        "purpose": "Fetch the full job record (status, timestamps, attempt count, error) from DynamoDB."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs/{job_id}/status",
+        "purpose": "Lightweight poll endpoint returning only the current status and attempt/retry information for the job."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs/{job_id}/result",
+        "purpose": "Return the job result if status is SUCCEEDED (inline from DynamoDB or presigned S3 link for large payloads); 409 if still pending, 404 if unknown."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs",
+        "purpose": "List jobs with optional status filter and pagination, backed by a DynamoDB status-index query."
+      },
+      {
+        "method": "DELETE",
+        "path": "/jobs/{job_id}",
+        "purpose": "Cancel a job that has not started processing yet (marks status CANCELED in DynamoDB) or delete a terminal job record."
+      },
+      {
+        "method": "GET",
+        "path": "/dead-letters",
+        "purpose": "Inspect messages currently sitting in the dead-letter queue for operational triage (receive without deleting)."
+      },
+      {
+        "method": "POST",
+        "path": "/dead-letters/{job_id}/replay",
+        "purpose": "Re-enqueue a dead-lettered job onto the main jobs queue and reset its status to QUEUED."
+      },
+      {
+        "method": "GET",
+        "path": "/healthz",
+        "purpose": "Health check verifying the service can reach DynamoDB and SQS."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Job",
+        "fields": [
+          "job_id (string, PK)",
+          "job_type (string)",
+          "payload (map)",
+          "status (string: QUEUED|RUNNING|SUCCEEDED|FAILED|DEAD_LETTER|CANCELED)",
+          "attempts (number)",
+          "max_attempts (number, default 2)",
+          "created_at (ISO8601 string)",
+          "updated_at (ISO8601 string)",
+          "started_at (ISO8601 string, optional)",
+          "completed_at (ISO8601 string, optional)",
+          "sqs_message_id (string, optional)",
+          "priority (string, optional)"
+        ]
+      },
+      {
+        "name": "JobResult",
+        "fields": [
+          "job_id (string, PK)",
+          "result (map, optional inline result)",
+          "result_s3_key (string, optional for large payloads)",
+          "result_size_bytes (number)",
+          "error_message (string, optional)",
+          "error_type (string, optional)",
+          "duration_ms (number)",
+          "completed_at (ISO8601 string)"
+        ]
+      },
+      {
+        "name": "JobSubmitRequest",
+        "fields": [
+          "job_type (string, required)",
+          "payload (object, required)",
+          "priority (string, optional)",
+          "idempotency_key (string, optional)"
+        ]
+      },
+      {
+        "name": "JobStatusResponse",
+        "fields": [
+          "job_id (string)",
+          "status (string)",
+          "attempts (number)",
+          "created_at (string)",
+          "updated_at (string)",
+          "error_message (string, optional)"
+        ]
+      },
+      {
+        "name": "DeadLetterEntry",
+        "fields": [
+          "job_id (string)",
+          "message_id (string)",
+          "receipt_handle (string)",
+          "body (string)",
+          "approximate_receive_count (number)",
+          "first_seen_at (string)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "jobs",
+        "justification": "Primary store for job records written by POST /jobs and read by the status, list, and detail endpoints; the Lambda worker updates status and attempt counts here. Includes a GSI on status+created_at to support GET /jobs?status= filtering."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "job-results",
+        "justification": "Stores completed job results (or the S3 pointer for large results) written by the Lambda worker and read by GET /jobs/{job_id}/result."
+      },
+      {
+        "service": "SQS",
+        "name": "job-queue",
+        "justification": "The API sends each submitted job to this queue; it is the Lambda worker's event source. Configured with a redrive policy of maxReceiveCount = 2 so a failed job is retried exactly once before dead-lettering."
+      },
+      {
+        "service": "SQS",
+        "name": "job-dlq",
+        "justification": "Dead-letter target of job-queue for jobs that fail after the single retry; read by GET /dead-letters and drained by POST /dead-letters/{job_id}/replay."
+      },
+      {
+        "service": "Lambda",
+        "name": "job-worker",
+        "justification": "The specification explicitly requires cloud-side asynchronous execution: this function is triggered by the SQS job-queue event source, performs the compute job, and writes status and results to DynamoDB."
+      },
+      {
+        "service": "IAM",
+        "name": "job-worker-role",
+        "justification": "Execution role for the job-worker Lambda granting sqs:ReceiveMessage/DeleteMessage/GetQueueAttributes on job-queue, dynamodb:UpdateItem/PutItem/GetItem on the jobs and job-results tables, s3:PutObject on the results bucket, and CloudWatch Logs write permissions."
+      },
+      {
+        "service": "IAM",
+        "name": "job-api-service-policy",
+        "justification": "Policy/user for the locally running FastAPI service granting the least-privilege access it needs: DynamoDB read/write on both tables, SQS SendMessage/ReceiveMessage/DeleteMessage on job-queue and job-dlq, S3 GetObject on the results bucket, and secretsmanager:GetSecretValue."
+      },
+      {
+        "service": "S3",
+        "name": "job-results-bucket",
+        "justification": "Overflow store for result payloads larger than the DynamoDB item limit; written by the Lambda worker and served to clients as presigned URLs from GET /jobs/{job_id}/result."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "job-worker-log-group",
+        "justification": "Log group for the Lambda worker's execution logs, needed to diagnose failed and dead-lettered jobs."
+      },
+      {
+        "service": "Secrets Manager",
+        "name": "job-api-config",
+        "justification": "Holds the API submission token/shared secret used by the FastAPI service to authenticate client job submissions, fetched at service startup."
+      },
+      {
+        "service": "SNS",
+        "name": "job-failure-alerts",
+        "justification": "The Lambda worker publishes a notification when a job exhausts its retry and is dead-lettered, so failures are surfaced rather than silently queued."
+      }
+    ],
+    "assumptions": [
+      "The FastAPI service runs outside Lambda (started by the harness) and calls DynamoDB, SQS, S3, SNS, and Secrets Manager directly; no API Gateway is planned because the REST API is not hosted in the cloud.",
+      "'Retried once' is implemented as an SQS redrive policy with maxReceiveCount = 2 (one initial attempt plus one retry) before the message moves to job-dlq; the Lambda's own retry attempts are disabled/set to 0 to avoid extra hidden retries.",
+      "Compute jobs are short-lived, CPU-light transformations of the submitted JSON payload; the Lambda timeout is set to 60 seconds and the SQS visibility timeout to 180 seconds (>= 3x timeout).",
+      "Job IDs are server-generated UUID4 strings; clients may supply an idempotency_key that is used to deduplicate resubmissions within the jobs table.",
+      "Results are stored inline in DynamoDB when serialized size is under 300 KB, otherwise written to S3 and referenced by result_s3_key.",
+      "Authentication is a simple bearer/API-key header validated against a value in Secrets Manager; no per-user identity, multi-tenancy, or fine-grained authorization is modeled.",
+      "Result and job records are retained indefinitely for the evaluation (DynamoDB TTL attribute is defined but not required to be enabled).",
+      "Status values are limited to QUEUED, RUNNING, SUCCEEDED, FAILED, DEAD_LETTER, and CANCELED.",
+      "Polling is the only client notification mechanism; no webhooks or WebSocket push is provided.",
+      "Dead-letter inspection uses SQS ReceiveMessage with visibility-preserving reads and does not guarantee complete enumeration of the queue."
+    ]
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": false,
+    "output": ""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 3,
+      "failed": 2
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": false,
+      "output": "./tests/test_app.py:637:44: E211 whitespace before '['",
+      "duration_s": 0.33
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "..................................                                       [100%]\n34 passed in 0.26s",
+      "duration_s": 0.83
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.16
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": false,
+      "output": "Error: Terraform encountered problems during initialisation, including problems\nwith the configuration, described below.\n\nThe Terraform configuration must be valid before initialization so that\nTerraform can determine which modules and providers need to be installed.\n\n\nError: Unterminated template string\n\n  on main.tf line 594, in locals:\n 580:     \"\"\"SQS triggered worker for the asynchronous job processing service.\n 581:     Consumes messages from the jobs queue, executes the compute job and writes\n 582:     the terminal status to the jobs table and the payload to the results table\n 583:     (or to S3 when the serialized result is too large for DynamoDB).\n 584:     \"\"\"\n 585:     import json\n 586:     import os\n 587:     import time\n 588:     from datetime import datetime, timezone\n 589:     from decimal import Decimal\n 590:     import boto3\n 591:     JOBS_TABLE = os.environ[\n\nNo closing marker was found for the string.",
+      "duration_s": 0.33
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 0 passed, 0 failed, 0 skipped.",
+      "duration_s": 3.0
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "category": "syntax_violation"
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "category": "syntax_violation"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 129,
+      "output_tokens": 2939,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 3555,
+      "output_tokens": 55681,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 3554,
+      "output_tokens": 39388,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 2.5069,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 35.0
+    },
+    {
+      "node": "generate_app",
+      "seconds": 505.0
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 423.8
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.3
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 3.3
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 async_job_processor (fastapi); AWS resources: DynamoDB:jobs, DynamoDB:job-results, SQS:job-queue, SQS:job-dlq, Lambda:job-worker, IAM:job-worker-role, IAM:job-api-service-policy, S3:job-results-bucket, CloudWatch:job-worker-log-group, Secrets Manager:job-api-config, SNS:job-failure-alerts",
+    "\ud83d\udc0d Generated application code (initial): 6 files \u2014 FastAPI service `async_job_processor` with a decoupled boto3 data layer.\n\n- **app.py** \u2014 FastAPI entrypoint exposing POST /jobs (with idempotency-key dedupe), GET /jobs (status filter + opaque cursor pagination), GET /jobs/{id}, /status, /result (inline result or presigned S3 URL, 409 while pending, 404 unknown), DELETE /jobs/{id} (cancel QUEUED / delete terminal / 409 RUNNING), GET /dead-letters, POST /dead-letters/{id}/replay, and GET /healthz. Auth is an optional bearer credential compared with `hmac.compare_digest`; repository and credential provider are FastAPI dependencies so they can be overridden in tests.\n- **storage.py** \u2014 `Settings` (all resource names from env with plan defaults), boto3 client factories honouring `AWS_ENDPOINT_URL` and defaulting to `us-east-1`, Decimal<->JSON conversion, cursor codec, and `JobRepository` covering DynamoDB jobs/job-results, SQS job-queue/job-dlq, S3 overflow results + presigned URLs, SNS failure alerts, and a health check. API credential is read from `API_AUTH_TOKEN` or Secrets Manager (no hardcoded secrets).\n- **worker.py** \u2014 SQS-triggered Lambda handler with partial batch failures: RUNNING \u2192 compute \u2192 result/SUCCEEDED, or FAILED on the first attempt (retried via redrive) and DEAD_LETTER + SNS alert once `ApproximateReceiveCount` reaches max_attempts (2).\n- **tests/test_app.py** \u2014 fully offline: every endpoint exercised through `TestClient` with an injected in-memory repository, plus worker success/retry/dead-letter paths and `JobRepository` covered against DynamoDB/SQS/S3/SNS stubs (boto3 factories monkeypatched to assert endpoint/region).\n- requirements.txt (fastapi, uvicorn, boto3, pydantic) and README with run/config instructions.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 3 files \u2014 placeholder",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u274c, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u274c, checkov \u2705",
+    "\ud83d\uded1 Validation still failing after 0 correction iteration(s); the 0-iteration bound is reached (Temporal Blind Spot safeguard)."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "worker.py",
+    "requirements.txt",
+    "README.md",
+    "tests/test_app.py"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf"
+  ]
+}

@@ -1,0 +1,458 @@
+{
+  "run_id": "20260901-091702-da35fa",
+  "timestamp": "2026-09-01T16:31:10.641138+00:00",
+  "started_at": "2026-09-01T16:17:02.541922+00:00",
+  "finished_at": "2026-09-01T16:31:10.641138+00:00",
+  "wall_seconds": 848.1,
+  "node_seconds_sum": 1123.9,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build an order-processing service. A REST API accepts new orders and writes them to DynamoDB, then publishes an event to an SQS queue for asynchronous fulfilment. An SNS topic notifies subscribers when an order status changes. Include endpoints to create orders, get order status, and list orders by customer.",
+  "benchmark_id": "C1-orders",
+  "tier": "complex",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "29cf562cae5a10b4fa3c6ecb6cd8a26053063df791e394a5d9ad5fb2e06998c5",
+    "complexity": {
+      "cloud_components": 3,
+      "aws_service_types": 3,
+      "api_operations": 3,
+      "domain_entities": 1,
+      "workflow_rules": 2,
+      "score": 9,
+      "rationale": "A multi-service asynchronous order path combines persistence, queuing, and status notification."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for orders",
+      "SQS queue for fulfilment events",
+      "SNS topic for status-change notifications",
+      "POST endpoint creating an order",
+      "GET endpoint returning order status",
+      "GET endpoint listing orders by customer"
+    ]
+  },
+  "repository": {
+    "commit": "7373b0431c085bb95a457c3760f90412ede0c62e",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "order_processing_service",
+    "summary": "A FastAPI REST backend that accepts customer orders, persists them in a DynamoDB table, enqueues a fulfilment event on SQS for asynchronous processing, and publishes order-status-change notifications to an SNS topic. An SQS-triggered Lambda worker performs the cloud-side fulfilment step (advancing order status in DynamoDB and publishing the status-change event to SNS). The API also exposes order status lookup and per-customer order listing via a DynamoDB global secondary index.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe used by the evaluation harness; reports reachability of DynamoDB, SQS and SNS."
+      },
+      {
+        "method": "POST",
+        "path": "/orders",
+        "purpose": "Create a new order: validate payload, write the order record to DynamoDB with status PENDING, then publish a fulfilment message to the SQS queue. Returns the created order with its generated order_id."
+      },
+      {
+        "method": "GET",
+        "path": "/orders/{order_id}",
+        "purpose": "Fetch the full order record (items, totals, timestamps, current status) from DynamoDB by primary key."
+      },
+      {
+        "method": "GET",
+        "path": "/orders/{order_id}/status",
+        "purpose": "Lightweight status lookup returning only order_id, status, and last updated timestamp."
+      },
+      {
+        "method": "PATCH",
+        "path": "/orders/{order_id}/status",
+        "purpose": "Update an order's status in DynamoDB and publish an order-status-changed event to the SNS topic so subscribers are notified."
+      },
+      {
+        "method": "GET",
+        "path": "/orders",
+        "purpose": "List orders filtered by the required customer_id query parameter (queries the DynamoDB customer GSI), with optional status filter and pagination via limit/next_token."
+      },
+      {
+        "method": "GET",
+        "path": "/customers/{customer_id}/orders",
+        "purpose": "Path-based alias for listing all orders belonging to a specific customer using the DynamoDB customer_id GSI."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "OrderItem",
+        "fields": [
+          "sku:string (required)",
+          "name:string (optional)",
+          "quantity:int (required, >=1)",
+          "unit_price:decimal (required, >=0)"
+        ]
+      },
+      {
+        "name": "Order",
+        "fields": [
+          "order_id:string (uuid4, DynamoDB partition key)",
+          "customer_id:string (required, GSI partition key)",
+          "items:list[OrderItem] (required, non-empty)",
+          "total_amount:decimal (computed from items)",
+          "currency:string (default USD)",
+          "status:string (PENDING|QUEUED|PROCESSING|FULFILLED|CANCELLED|FAILED)",
+          "created_at:string (ISO-8601 UTC, GSI sort key)",
+          "updated_at:string (ISO-8601 UTC)",
+          "shipping_address:string (optional)",
+          "notes:string (optional)"
+        ]
+      },
+      {
+        "name": "CreateOrderRequest",
+        "fields": [
+          "customer_id:string (required)",
+          "items:list[OrderItem] (required)",
+          "currency:string (optional, default USD)",
+          "shipping_address:string (optional)",
+          "notes:string (optional)"
+        ]
+      },
+      {
+        "name": "OrderStatusUpdateRequest",
+        "fields": [
+          "status:string (required, allowed status enum)",
+          "reason:string (optional)"
+        ]
+      },
+      {
+        "name": "OrderStatusResponse",
+        "fields": [
+          "order_id:string",
+          "status:string",
+          "updated_at:string"
+        ]
+      },
+      {
+        "name": "OrderListResponse",
+        "fields": [
+          "customer_id:string",
+          "orders:list[Order]",
+          "count:int",
+          "next_token:string (optional, base64 LastEvaluatedKey)"
+        ]
+      },
+      {
+        "name": "FulfillmentMessage",
+        "fields": [
+          "order_id:string",
+          "customer_id:string",
+          "total_amount:decimal",
+          "status:string",
+          "event_type:string (order.created)",
+          "occurred_at:string (ISO-8601 UTC)"
+        ]
+      },
+      {
+        "name": "OrderStatusChangedEvent",
+        "fields": [
+          "order_id:string",
+          "customer_id:string",
+          "previous_status:string",
+          "new_status:string",
+          "reason:string (optional)",
+          "changed_at:string (ISO-8601 UTC)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "orders",
+        "justification": "Primary persistence for order records written by POST /orders and read by the status and listing endpoints. Partition key order_id; GSI 'customer_id-created_at-index' (customer_id HASH, created_at RANGE) backs 'list orders by customer'. Pay-per-request billing."
+      },
+      {
+        "service": "SQS",
+        "name": "order-fulfillment-queue",
+        "justification": "The API publishes a FulfillmentMessage to this queue after each successful order write, providing the asynchronous fulfilment hand-off required by the spec. Redrive policy targets the dead-letter queue."
+      },
+      {
+        "service": "SQS",
+        "name": "order-fulfillment-dlq",
+        "justification": "Dead-letter queue for fulfilment messages that the worker Lambda fails to process after maxReceiveCount attempts, so failed orders are not silently lost."
+      },
+      {
+        "service": "SNS",
+        "name": "order-status-changed-topic",
+        "justification": "Notifies subscribers whenever an order status changes; published to by the PATCH /orders/{order_id}/status endpoint and by the fulfilment Lambda when it advances an order to FULFILLED/FAILED."
+      },
+      {
+        "service": "Lambda",
+        "name": "order-fulfillment-worker",
+        "justification": "Cloud-side asynchronous consumer of order-fulfillment-queue (via an SQS event source mapping). It updates the order status in the DynamoDB orders table and publishes an OrderStatusChangedEvent to SNS. This is genuine event-driven processing, not API hosting."
+      },
+      {
+        "service": "IAM",
+        "name": "order-fulfillment-worker-role",
+        "justification": "Execution role for the fulfilment Lambda granting sqs:ReceiveMessage/DeleteMessage/GetQueueAttributes on the queue, dynamodb:GetItem/UpdateItem on the orders table, sns:Publish on the topic, and CloudWatch Logs write permissions."
+      },
+      {
+        "service": "IAM",
+        "name": "order-api-service-policy",
+        "justification": "Least-privilege policy (attached to the credentials/role used by the locally running FastAPI service) allowing dynamodb:PutItem/GetItem/UpdateItem/Query on the orders table and its GSI, sqs:SendMessage on the fulfilment queue, and sns:Publish on the status topic."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/aws/lambda/order-fulfillment-worker",
+        "justification": "Log group with retention for the fulfilment Lambda so asynchronous processing outcomes and failures are observable."
+      }
+    ],
+    "assumptions": [
+      "No authentication or authorisation was specified, so all endpoints are open; customer_id is supplied by the caller rather than derived from a token.",
+      "The backend runs as a standalone FastAPI service started by the harness and calls AWS via boto3 with an endpoint_url pointing at LocalStack, so no API Gateway resource is planned.",
+      "Order IDs are server-generated UUID4 strings; created_at/updated_at are ISO-8601 UTC timestamps.",
+      "Allowed statuses are PENDING, QUEUED, PROCESSING, FULFILLED, CANCELLED, FAILED; new orders start at PENDING and become QUEUED once the SQS message is sent.",
+      "'List orders by customer' means a DynamoDB GSI Query on customer_id sorted by created_at descending, with limit/next_token pagination (default limit 50).",
+      "total_amount is computed server-side as the sum of quantity * unit_price and is not accepted from the client.",
+      "SNS subscribers are configured out of band; the plan creates only the topic (no hard-coded email/HTTP subscriptions) since none were specified.",
+      "Order creation is not transactional across services: the DynamoDB write happens first and the SQS send follows; a send failure leaves the order in PENDING and returns 502 so the client can retry.",
+      "Standard (non-FIFO) SQS queue is sufficient because the spec does not require strict ordering or deduplication.",
+      "No secrets or credentials are required by the application, so Secrets Manager is not provisioned.",
+      "Sensible defaults: DynamoDB PAY_PER_REQUEST, SQS visibility timeout 30s with maxReceiveCount 3, CloudWatch log retention 14 days."
+    ]
+  },
+  "max_iterations": 3,
+  "iterations_used": 1,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_iam_policy_document.worker_assume_role: Reading...\ndata.aws_iam_policy_document.worker_assume_role: Read complete after 0s [id=666922913]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.archive_file.order_fulfillment_worker will be read during apply\n  # (depends on a resource or a module with changes pending)\n <= data \"archive_file\" \"order_fulfillment_worker\" {\n      + id                  = (known after apply)\n      + output_base64sha256 = (known after apply)\n      + output_base64sha512 = (known after apply)\n      + output_md5          = (known after apply)\n      + output_path         = \"./build/order-fulfillment-worker.zip\"\n      + output_sha          = (known after apply)\n      + output_sha256       = (known after apply)\n      + output_sha512       = (known after apply)\n      + output_size         = (known after apply)\n      + source_file         = \"./build/index.py\"\n      + type                = \"zip\"\n    }\n\n  # data.aws_iam_policy_document.order_api_service will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"order_api_service\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"OrdersTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"EnqueueFulfillmentMessages\"\n        }\n      + statement {\n          + actions   = [\n              + \"sns:GetTopicAttributes\",\n              + \"sns:Publish\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"PublishOrderStatusEvents\"\n        }\n    }\n\n  # data.aws_iam_policy_document.worker_permissions will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"worker_permissions\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"sqs:ChangeMessageVisibility\",\n              + \"sqs:DeleteMessage\",\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:ReceiveMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ConsumeFulfillmentQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"SendToDeadLetterQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UpdateOrderRecords\"\n        }\n      + statement {\n          + actions   = [\n              + \"sns:Publish\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"PublishStatusChange\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"WriteWorkerLogs\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.order_fulfillment_worker will be created\n  + resource \"aws_cloudwatch_log_group\" \"order_fulfillment_worker\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/aws/lambda/order-fulfillment-worker\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"      = \"/aws/lambda/order-fulfillment-worker\"\n          + \"component\" = \"order-fulfillment\"\n        }\n      + tags_all          = {\n          + \"Name\"       = \"/aws/lambda/order-fulfillment-worker\"\n          + \"component\"  = \"order-fulfillment\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"order-processing-service\"\n        }\n    }\n\n  # aws_dynamodb_table.orders will be created\n  + resource \"aws_dynamodb_table\" \"orders\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"order_id\"\n      + id               = (known after apply)\n      + name             = \"orders\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\"      = \"orders\"\n          + \"component\" = \"order-persistence\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"orders\"\n          + \"component\"  = \"order-persistence\"\n          + \"managed-by\" = \"terraform\"\n         "
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 3,
+      "failed": 2
+    },
+    {
+      "iteration": 1,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": false,
+      "output": "./worker.py:13:1: F401 'storage.FulfillmentQueue' imported but unused",
+      "duration_s": 0.39
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "..................................                                       [100%]\n34 passed in 0.25s",
+      "duration_s": 0.96
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.14
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 21.04
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 57 passed, 1 failed, 6 skipped.\nCKV_AWS_338 Ensure CloudWatch log groups retains logs for at least 1 year on aws_cloudwatch_log_group.order_fulfillment_worker (/main.tf)",
+      "duration_s": 3.0
+    },
+    {
+      "iteration": 1,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.3
+    },
+    {
+      "iteration": 1,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "..................................                                       [100%]\n34 passed in 0.23s",
+      "duration_s": 0.7
+    },
+    {
+      "iteration": 1,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.13
+    },
+    {
+      "iteration": 1,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 23.88
+    },
+    {
+      "iteration": 1,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 58 passed, 0 failed, 6 skipped.",
+      "duration_s": 2.56
+    },
+    {
+      "iteration": 1,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_iam_policy_document.worker_assume_role: Reading...\ndata.aws_iam_policy_document.worker_assume_role: Read complete after 0s [id=666922913]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.archive_file.order_fulfillment_worker will be read during apply\n  # (depends on a resource or a module with changes pending)\n <= data \"archive_file\" \"order_fulfillment_worker\" {\n      + id                  = (known after apply)\n      + output_base64sha256 = (known after apply)\n      + output_base64sha512 = (known after apply)\n      + output_md5          = (known after apply)\n      + output_path         = \"./build/order-fulfillment-worker.zip\"\n      + output_sha          = (known after apply)\n      + output_sha256       = (known after apply)\n      + output_sha512       = (known after apply)\n      + output_size         = (known after apply)\n      + source_file         = \"./build/index.py\"\n      + type                = \"zip\"\n    }\n\n  # data.aws_iam_policy_document.order_api_service will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"order_api_service\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"OrdersTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"EnqueueFulfillmentMessages\"\n        }\n      + statement {\n          + actions   = [\n              + \"sns:GetTopicAttributes\",\n              + \"sns:Publish\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"PublishOrderStatusEvents\"\n        }\n    }\n\n  # data.aws_iam_policy_document.worker_permissions will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"worker_permissions\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"sqs:ChangeMessageVisibility\",\n              + \"sqs:DeleteMessage\",\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:ReceiveMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ConsumeFulfillmentQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"SendToDeadLetterQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UpdateOrderRecords\"\n        }\n      + statement {\n          + actions   = [\n              + \"sns:Publish\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"PublishStatusChange\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"WriteWorkerLogs\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.order_fulfillment_worker will be created\n  + resource \"aws_cloudwatch_log_group\" \"order_fulfillment_worker\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/aws/lambda/order-fulfillment-worker\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"      = \"/aws/lambda/order-fulfillment-worker\"\n          + \"component\" = \"order-fulfillment\"\n        }\n      + tags_all          = {\n          + \"Name\"       = \"/aws/lambda/order-fulfillment-worker\"\n          + \"component\"  = \"order-fulfillment\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"order-processing-service\"\n        }\n    }\n\n  # aws_dynamodb_table.orders will be created\n  + resource \"aws_dynamodb_table\" \"orders\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"order_id\"\n      + id               = (known after apply)\n      + name             = \"orders\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\"      = \"orders\"\n          + \"component\" = \"order-persistence\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"orders\"\n          + \"component\"  = \"order-persistence\"\n          + \"managed-by\" = \"terraform\"\n         ",
+      "duration_s": 68.24
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "category": "syntax_violation"
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 118,
+      "output_tokens": 3061,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 3344,
+      "output_tokens": 50458,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 3343,
+      "output_tokens": 19878,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 33615,
+      "output_tokens": 30365,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 12494,
+      "output_tokens": 9152,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 3.1204,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 34.6
+    },
+    {
+      "node": "generate_app",
+      "seconds": 460.8
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 200.9
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.5
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 24.0
+    },
+    {
+      "node": "generate_app",
+      "seconds": 233.8
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 72.6
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.1
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 26.4
+    },
+    {
+      "node": "deploy",
+      "seconds": 68.2
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 order_processing_service (fastapi); AWS resources: DynamoDB:orders, SQS:order-fulfillment-queue, SQS:order-fulfillment-dlq, SNS:order-status-changed-topic, Lambda:order-fulfillment-worker, IAM:order-fulfillment-worker-role, IAM:order-api-service-policy, CloudWatch:/aws/lambda/order-fulfillment-worker",
+    "\ud83d\udc0d Generated application code (initial): 8 files \u2014 FastAPI order-processing backend with a decoupled AWS layer. `storage.py` defines three abstract interfaces (OrderRepository, FulfillmentQueue, OrderNotifier) with DynamoDB/SQS/SNS implementations that read AWS_ENDPOINT_URL (LocalStack) and default to us-east-1, plus in-memory fakes for offline use. `app.py` exposes /health, POST /orders (DynamoDB write then SQS fulfilment message, status PENDING\u2192QUEUED, 502 on send failure), GET /orders/{id}, GET /orders/{id}/status, PATCH /orders/{id}/status (updates DynamoDB and publishes an SNS status-changed event), GET /orders?customer_id=... with status filter and base64 next_token pagination over the customer GSI, and the /customers/{id}/orders alias. `worker.py` is the SQS-triggered fulfilment Lambda handler returning batchItemFailures. Tests use FastAPI's TestClient (with a stdlib ASGI fallback client if httpx is absent), dependency overrides with in-memory fakes, and fake boto3 table/SQS/SNS clients \u2014 no network, no live AWS. Resource names, region and endpoint all come from environment variables; requirements.txt lists only fastapi, uvicorn, boto3, pydantic.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the order-processing service, one-to-one with the plan's aws_resources list: a DynamoDB `orders` table (PAY_PER_REQUEST, SSE, point-in-time recovery, `customer_id-created_at-index` GSI), an SQS `order-fulfillment-queue` with SQS-managed SSE and a redrive policy to `order-fulfillment-dlq`, an SNS `order-status-changed-topic` encrypted with `alias/aws/sns`, a `/aws/lambda/order-fulfillment-worker` CloudWatch log group with 14-day retention, the `order-fulfillment-worker` Lambda (Python source emitted by `local_file`, zipped by the `archive_file` data source so no pre-built artifact is needed) wired to the queue via an event source mapping with batch-item-failure reporting, its least-privilege execution role, and the standalone `order-api-service-policy` scoped to the table + its GSI, the queue and the topic. versions.tf pins hashicorp/aws ~> 5.0 (plus local/archive) and the provider carries default_tags (project, managed-by). Only LocalStack Community services are used \u2014 no KMS/VPC resources were invented since none appear in the plan; the handful of Checkov checks that would require them (CKV_AWS_119, CKV_AWS_27, CKV_AWS_158, CKV_AWS_117, CKV_AWS_272) carry inline justified skips, while tracing, reserved concurrency, a Lambda DLQ, PITR and SSE satisfy the rest.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u274c, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\u267b\ufe0f Validation failed for: app, iac \u2014 starting correction.",
+    "\ud83d\udd27 Correction iteration 1/3: feeding error logs back with the original specification.",
+    "\ud83d\udc0d Generated application code (correction 1): 8 files \u2014 Fixed the single flake8 error by removing the unused `FulfillmentQueue` import from `worker.py` (the `# noqa: F401` comment did not apply because flake8 reports the error on the first line of the multi-line import). No other files or behaviour changed; all endpoints, tests and AWS wiring remain intact.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (correction 1): 4 files \u2014 Fixed the single Checkov failure (CKV_AWS_338) by raising the default CloudWatch log retention for the fulfilment worker log group from 14 to 365 days via the `log_retention_days` variable default (description updated accordingly). No resources were added or removed; all other files are unchanged and returned in full.",
+    "\ud83d\udd0e App validation (iteration 1): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 1): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "models.py",
+    "storage.py",
+    "worker.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

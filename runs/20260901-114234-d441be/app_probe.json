@@ -1,0 +1,68 @@
+{
+  "run_id": "20260901-114234-d441be",
+  "probed_at": "2026-09-01T18:58:06.634790+00:00",
+  "framework": "fastapi",
+  "localstack_url": "http://localhost:4566",
+  "base_url": "http://127.0.0.1:59582",
+  "launched": true,
+  "results": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "probe_path": "/health",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/customers",
+      "probe_path": "/customers",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/customers/{customer_id}",
+      "probe_path": "/customers/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/customers/{customer_id}/balance",
+      "probe_path": "/customers/smoke-id/balance",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/purchases",
+      "probe_path": "/purchases",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/purchases/{idempotency_key}",
+      "probe_path": "/purchases/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/customers/{customer_id}/transactions",
+      "probe_path": "/customers/smoke-id/transactions",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/admin/process-queue",
+      "probe_path": "/admin/process-queue",
+      "status": "200",
+      "serving": true
+    }
+  ],
+  "serving_endpoints": 8,
+  "total_endpoints": 8
+}

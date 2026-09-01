@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+boto3
+pydantic
+# required at test time by fastapi.testclient
+httpx

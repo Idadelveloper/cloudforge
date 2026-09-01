@@ -1,0 +1,324 @@
+{
+  "run_id": "20260901-093531-c653a5",
+  "timestamp": "2026-09-01T16:41:25.635788+00:00",
+  "started_at": "2026-09-01T16:35:31.980777+00:00",
+  "finished_at": "2026-09-01T16:41:25.635788+00:00",
+  "wall_seconds": 353.7,
+  "node_seconds_sum": 511.2,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "failed",
+  "spec": "Build an order-processing service. A REST API accepts new orders and writes them to DynamoDB, then publishes an event to an SQS queue for asynchronous fulfilment. An SNS topic notifies subscribers when an order status changes. Include endpoints to create orders, get order status, and list orders by customer.",
+  "benchmark_id": "C1-orders",
+  "tier": "complex",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "29cf562cae5a10b4fa3c6ecb6cd8a26053063df791e394a5d9ad5fb2e06998c5",
+    "complexity": {
+      "cloud_components": 3,
+      "aws_service_types": 3,
+      "api_operations": 3,
+      "domain_entities": 1,
+      "workflow_rules": 2,
+      "score": 9,
+      "rationale": "A multi-service asynchronous order path combines persistence, queuing, and status notification."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for orders",
+      "SQS queue for fulfilment events",
+      "SNS topic for status-change notifications",
+      "POST endpoint creating an order",
+      "GET endpoint returning order status",
+      "GET endpoint listing orders by customer"
+    ]
+  },
+  "repository": {
+    "commit": "7373b0431c085bb95a457c3760f90412ede0c62e",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "order_processing_service",
+    "summary": "A FastAPI REST service for order intake and tracking. Clients POST new orders, which are persisted to a DynamoDB table and then enqueued on an SQS queue for asynchronous fulfilment by a Lambda worker. Order status changes are published to an SNS topic so downstream subscribers are notified. Read endpoints expose single-order status lookup and per-customer order listings via a DynamoDB global secondary index.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/orders",
+        "purpose": "Create a new order: validate payload, write item to DynamoDB with status PENDING, send fulfilment message to SQS, publish initial status event to SNS, return the created order."
+      },
+      {
+        "method": "GET",
+        "path": "/orders/{order_id}",
+        "purpose": "Fetch a single order's status and details from DynamoDB by primary key; 404 if not found."
+      },
+      {
+        "method": "GET",
+        "path": "/orders",
+        "purpose": "List orders for a customer via required customer_id query parameter (optional status filter and limit), using the customer GSI."
+      },
+      {
+        "method": "PATCH",
+        "path": "/orders/{order_id}/status",
+        "purpose": "Update an order's status in DynamoDB and publish the change to the SNS topic for subscriber notification."
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe reporting service and AWS client configuration status."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "OrderItem",
+        "fields": [
+          "sku: str",
+          "description: str | None",
+          "quantity: int (>=1)",
+          "unit_price: float (>=0)"
+        ]
+      },
+      {
+        "name": "OrderCreateRequest",
+        "fields": [
+          "customer_id: str",
+          "items: list[OrderItem] (min 1)",
+          "currency: str = 'USD'",
+          "shipping_address: str | None",
+          "notes: str | None"
+        ]
+      },
+      {
+        "name": "Order",
+        "fields": [
+          "order_id: str (uuid4, DynamoDB partition key)",
+          "customer_id: str (GSI partition key)",
+          "status: str (PENDING|PROCESSING|FULFILLED|CANCELLED|FAILED)",
+          "items: list[OrderItem]",
+          "total_amount: float",
+          "currency: str",
+          "shipping_address: str | None",
+          "notes: str | None",
+          "created_at: str (ISO-8601, GSI sort key)",
+          "updated_at: str (ISO-8601)"
+        ]
+      },
+      {
+        "name": "OrderStatusUpdateRequest",
+        "fields": [
+          "status: str (PENDING|PROCESSING|FULFILLED|CANCELLED|FAILED)",
+          "reason: str | None"
+        ]
+      },
+      {
+        "name": "OrderListResponse",
+        "fields": [
+          "customer_id: str",
+          "count: int",
+          "orders: list[Order]"
+        ]
+      },
+      {
+        "name": "FulfilmentMessage",
+        "fields": [
+          "order_id: str",
+          "customer_id: str",
+          "total_amount: float",
+          "currency: str",
+          "status: str",
+          "created_at: str"
+        ]
+      },
+      {
+        "name": "OrderStatusEvent",
+        "fields": [
+          "order_id: str",
+          "customer_id: str",
+          "previous_status: str | None",
+          "new_status: str",
+          "reason: str | None",
+          "changed_at: str"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "orders",
+        "justification": "Primary store for order records. Partition key order_id serves GET /orders/{order_id}; GSI customer_id-created_at-index serves GET /orders?customer_id=... listings. PAY_PER_REQUEST billing."
+      },
+      {
+        "service": "SQS",
+        "name": "order-fulfilment-queue",
+        "justification": "POST /orders publishes a fulfilment event here for asynchronous processing, exactly as the specification requires."
+      },
+      {
+        "service": "SQS",
+        "name": "order-fulfilment-dlq",
+        "justification": "Redrive target for order-fulfilment-queue so repeatedly failing fulfilment messages are retained instead of lost."
+      },
+      {
+        "service": "SNS",
+        "name": "order-status-topic",
+        "justification": "The API and the fulfilment worker publish order status change events here to notify subscribers."
+      },
+      {
+        "service": "Lambda",
+        "name": "order-fulfilment-worker",
+        "justification": "Cloud-side asynchronous consumer of order-fulfilment-queue (event source mapping): advances order status in DynamoDB and publishes the status change to the SNS topic. This is the async fulfilment execution the spec calls for, not hosting for the REST API."
+      },
+      {
+        "service": "IAM",
+        "name": "order-fulfilment-worker-role",
+        "justification": "Execution role for the fulfilment Lambda granting sqs:ReceiveMessage/DeleteMessage/GetQueueAttributes on the queue, dynamodb:GetItem/UpdateItem on the orders table, sns:Publish on the topic, and CloudWatch Logs write access."
+      },
+      {
+        "service": "IAM",
+        "name": "order-service-app-policy",
+        "justification": "Least-privilege policy/user for the standalone backend service covering dynamodb:PutItem/GetItem/UpdateItem/Query on the table and GSI, sqs:SendMessage on the queue, and sns:Publish on the topic."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/aws/lambda/order-fulfilment-worker",
+        "justification": "Log group for the fulfilment Lambda, giving operational visibility into asynchronous processing failures and retries."
+      }
+    ],
+    "assumptions": []
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": false,
+    "output": ""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 4,
+      "failed": 1
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.35
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "...................                                                      [100%]\n19 passed in 0.64s",
+      "duration_s": 1.28
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.16
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": false,
+      "output": "Error: Terraform encountered problems during initialisation, including problems\nwith the configuration, described below.\n\nThe Terraform configuration must be valid before initialization so that\nTerraform can determine which modules and providers need to be installed.\n\n\nError: Unterminated template string\n\n  on main.tf line 413, in resource \"local_file\" \"fulfilment_worker_source\":\n 396: \"\"\"Order fulfilment worker.\n 397: Consumes messages from the order fulfilment SQS queue, advances the order\n 398: status in DynamoDB and publishes the status change to the SNS topic.\n 399: \"\"\"\n 400: import datetime\n 401: import json\n 402: import logging\n 403: import os\n 404: import boto3\n 405: from botocore.exceptions import ClientError\n 406: LOGGER = logging.getLogger()\n 407: LOGGER.setLevel(logging.INFO)\n 408: TABLE_NAME = os.environ.get(\n\nNo closing marker was found for the string.",
+      "duration_s": 0.4
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 0 passed, 0 failed, 0 skipped.",
+      "duration_s": 3.71
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "category": "syntax_violation"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 118,
+      "output_tokens": 1711,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2222,
+      "output_tokens": 35546,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2221,
+      "output_tokens": 15126,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.3529,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 19.7
+    },
+    {
+      "node": "generate_app",
+      "seconds": 329.7
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 155.9
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.8
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 4.1
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 order_processing_service (fastapi); AWS resources: DynamoDB:orders, SQS:order-fulfilment-queue, SQS:order-fulfilment-dlq, SNS:order-status-topic, Lambda:order-fulfilment-worker, IAM:order-fulfilment-worker-role, IAM:order-service-app-policy, CloudWatch:/aws/lambda/order-fulfilment-worker",
+    "\ud83d\udc0d Generated application code (initial): 8 files \u2014 FastAPI order-processing backend split into decoupled layers: `models.py` (pydantic request/response/event models), `storage.py` (OrderRepository / EventPublisher interfaces with DynamoDB+SQS+SNS implementations, all boto3 clients honouring AWS_ENDPOINT_URL and us-east-1, env-driven resource names: ORDERS_TABLE_NAME=orders, ORDERS_CUSTOMER_INDEX=customer_id-created_at-index, ORDER_QUEUE_NAME=order-fulfilment-queue, ORDER_STATUS_TOPIC_ARN), `app.py` (POST /orders, GET /orders/{id}, GET /orders?customer_id=..., PATCH /orders/{id}/status, GET /health with FastAPI dependency injection for the repository and publisher), and `worker.py` (Lambda SQS consumer that advances status and publishes to SNS with partial batch failures). Tests in `tests/test_app.py` exercise every endpoint via FastAPI's TestClient (with a stdlib ASGI fallback if httpx is absent) using injected in-memory fakes, plus DynamoDB/SQS/SNS doubles for the storage layer and a monkeypatched boto3 check for the endpoint/region pattern \u2014 no network or LocalStack required. Only flask/fastapi/uvicorn/boto3/pydantic-family imports are used; no secrets, eval, shell, or debug literals.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 3 files \u2014 placeholder",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u274c, checkov \u2705",
+    "\ud83d\uded1 Validation still failing after 0 correction iteration(s); the 0-iteration bound is reached (Temporal Blind Spot safeguard)."
+  ],
+  "app_files": [
+    "app.py",
+    "models.py",
+    "storage.py",
+    "worker.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf"
+  ]
+}

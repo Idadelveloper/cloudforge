@@ -1,0 +1,346 @@
+{
+  "run_id": "20260901-101243-4603bd",
+  "timestamp": "2026-09-01T17:20:44.408866+00:00",
+  "started_at": "2026-09-01T17:12:43.417764+00:00",
+  "finished_at": "2026-09-01T17:20:44.408866+00:00",
+  "wall_seconds": 481.0,
+  "node_seconds_sum": 831.0,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build an asynchronous job-processing service. Clients submit compute jobs through a REST API; jobs are queued on SQS and processed by a Lambda worker that writes results to DynamoDB. Clients can poll a status endpoint and fetch results when a job completes. Failed jobs are retried once and then routed to a dead-letter queue.",
+  "benchmark_id": "C2-jobs",
+  "tier": "complex",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "2573e8c9aaa3935214f1215e9758e78ef3b8affefd4a99e5eba5695b1ad66797",
+    "complexity": {
+      "cloud_components": 4,
+      "aws_service_types": 3,
+      "api_operations": 3,
+      "domain_entities": 1,
+      "workflow_rules": 3,
+      "score": 11,
+      "rationale": "Queue-worker processing adds retry and dead-letter handling to an asynchronous job lifecycle."
+    },
+    "congruence_checklist": [
+      "SQS queue for submitted jobs",
+      "Lambda worker consuming the queue",
+      "DynamoDB table for job status and results",
+      "Dead-letter queue for failed jobs",
+      "POST endpoint submitting a job",
+      "GET endpoint polling job status",
+      "GET endpoint fetching results"
+    ]
+  },
+  "repository": {
+    "commit": "7373b0431c085bb95a457c3760f90412ede0c62e",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "async_job_processor",
+    "summary": "A FastAPI service that accepts compute job submissions over REST, persists job metadata in DynamoDB, and enqueues job messages on SQS. An SQS-triggered Lambda worker executes each job, writes results back to DynamoDB, and updates status; messages that fail are retried once via the queue's redrive policy and then moved to a dead-letter queue. Clients poll status and result endpoints, and can list or cancel pending jobs. Large result payloads are stored in S3 with the object key recorded on the job record.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/jobs",
+        "purpose": "Submit a new compute job: validate payload, create a DynamoDB job record with status QUEUED, send a message to the SQS jobs queue, return the job id."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs/{job_id}",
+        "purpose": "Fetch the full job record (metadata plus current status) from DynamoDB."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs/{job_id}/status",
+        "purpose": "Lightweight polling endpoint returning status, attempt count, and timestamps."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs/{job_id}/result",
+        "purpose": "Return the job result once status is SUCCEEDED (inline result or presigned S3 URL for large payloads); 409 if still running, 404 if unknown."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs",
+        "purpose": "List jobs with optional status filter and pagination, backed by a DynamoDB status-index query."
+      },
+      {
+        "method": "DELETE",
+        "path": "/jobs/{job_id}",
+        "purpose": "Cancel a job that has not started processing by marking its status CANCELLED in DynamoDB."
+      },
+      {
+        "method": "GET",
+        "path": "/jobs/failed/dead-letter",
+        "purpose": "Inspect messages currently sitting in the dead-letter queue for operational triage."
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe that verifies connectivity to DynamoDB and SQS."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Job",
+        "fields": [
+          "job_id (string, partition key)",
+          "job_type (string)",
+          "payload (map)",
+          "status (string: QUEUED|RUNNING|SUCCEEDED|FAILED|CANCELLED|DEAD_LETTER)",
+          "attempts (number)",
+          "priority (string, optional)",
+          "created_at (ISO8601 string)",
+          "updated_at (ISO8601 string)",
+          "started_at (ISO8601 string, optional)",
+          "completed_at (ISO8601 string, optional)",
+          "error_message (string, optional)",
+          "result_location (string, optional S3 key)",
+          "sqs_message_id (string, optional)"
+        ]
+      },
+      {
+        "name": "JobSubmissionRequest",
+        "fields": [
+          "job_type (string, required)",
+          "payload (object, required)",
+          "priority (string, optional, default normal)",
+          "callback_metadata (object, optional)"
+        ]
+      },
+      {
+        "name": "JobSubmissionResponse",
+        "fields": [
+          "job_id (string)",
+          "status (string)",
+          "created_at (string)"
+        ]
+      },
+      {
+        "name": "JobStatusResponse",
+        "fields": [
+          "job_id (string)",
+          "status (string)",
+          "attempts (number)",
+          "created_at (string)",
+          "updated_at (string)",
+          "error_message (string, optional)"
+        ]
+      },
+      {
+        "name": "JobResultResponse",
+        "fields": [
+          "job_id (string)",
+          "status (string)",
+          "result (object, optional)",
+          "result_url (string, optional)",
+          "completed_at (string, optional)"
+        ]
+      },
+      {
+        "name": "DeadLetterMessage",
+        "fields": [
+          "message_id (string)",
+          "job_id (string)",
+          "body (object)",
+          "approximate_receive_count (number)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "jobs",
+        "justification": "Primary store for job records: written by POST /jobs, updated by the Lambda worker, and read by the status/result/list endpoints. Partition key job_id with a global secondary index on status+created_at for GET /jobs filtering."
+      },
+      {
+        "service": "SQS",
+        "name": "job-queue",
+        "justification": "Queue the API writes to on job submission and the event source for the Lambda worker. Redrive policy with maxReceiveCount=2 gives exactly one retry before the dead-letter queue."
+      },
+      {
+        "service": "SQS",
+        "name": "job-dlq",
+        "justification": "Dead-letter queue target for the job queue's redrive policy; read by GET /jobs/failed/dead-letter for triage."
+      },
+      {
+        "service": "Lambda",
+        "name": "job-worker",
+        "justification": "Cloud-side asynchronous worker required by the spec: consumes SQS messages, executes the compute job, and writes results/status to DynamoDB and S3."
+      },
+      {
+        "service": "Lambda",
+        "name": "job-worker-event-source-mapping",
+        "justification": "Event source mapping binding job-queue to job-worker so queued jobs are processed without any polling by the API service."
+      },
+      {
+        "service": "S3",
+        "name": "job-results",
+        "justification": "Stores result payloads too large for a DynamoDB item; the worker uploads objects and GET /jobs/{id}/result returns a presigned URL."
+      },
+      {
+        "service": "IAM",
+        "name": "job-worker-role",
+        "justification": "Execution role for the Lambda worker granting sqs:ReceiveMessage/DeleteMessage/GetQueueAttributes on job-queue, dynamodb read/write on the jobs table, s3:PutObject on job-results, and CloudWatch Logs write access."
+      },
+      {
+        "service": "IAM",
+        "name": "job-api-service-role",
+        "justification": "Policy/role describing the least-privilege permissions the externally hosted FastAPI service uses: dynamodb read/write on jobs, sqs:SendMessage on job-queue, sqs:ReceiveMessage on job-dlq, and s3:GetObject on job-results."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "job-worker-logs-and-metrics",
+        "justification": "Log group for the Lambda worker plus alarms on DLQ depth and worker error rate, giving observability for the retry/dead-letter behaviour."
+      }
+    ],
+    "assumptions": []
+  },
+  "max_iterations": 3,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_partition.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_iam_policy_document.worker_tracing: Reading...\ndata.aws_iam_policy_document.worker_assume_role: Reading...\ndata.aws_region.current: Reading...\ndata.aws_partition.current: Read complete after 0s [id=aws]\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.worker_assume_role: Read complete after 0s [id=666922913]\ndata.aws_iam_policy_document.worker_tracing: Read complete after 0s [id=3796702271]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\ndata.aws_iam_policy_document.api_assume_role: Reading...\ndata.aws_iam_policy_document.api_assume_role: Read complete after 0s [id=2426655886]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.archive_file.worker will be read during apply\n  # (depends on a resource or a module with changes pending)\n <= data \"archive_file\" \"worker\" {\n      + id                  = (known after apply)\n      + output_base64sha256 = (known after apply)\n      + output_base64sha512 = (known after apply)\n      + output_md5          = (known after apply)\n      + output_path         = \"./build/job_worker.zip\"\n      + output_sha          = (known after apply)\n      + output_sha256       = (known after apply)\n      + output_sha512       = (known after apply)\n      + output_size         = (known after apply)\n      + source_file         = \"./build/job_worker/index.py\"\n      + type                = \"zip\"\n    }\n\n  # data.aws_iam_policy_document.api will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"api\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ManageJobRecords\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"EnqueueJobs\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:ReceiveMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"InspectDeadLetterQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:GetObject\",\n              + \"s3:GetObjectVersion\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ReadJobResults\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"kms:DescribeKey\",\n              + \"kms:Encrypt\",\n              + \"kms:GenerateDataKey*\",\n              + \"kms:ReEncrypt*\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UseDataKey\"\n        }\n    }\n\n  # data.aws_iam_policy_document.worker will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"worker\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"WriteWorkerLogs\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:ChangeMessageVisibility\",\n              + \"sqs:DeleteMessage\",\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:ReceiveMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ConsumeJobQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"SendToDeadLetterQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:ConditionCheckItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"UpdateJobRecords\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:AbortMultipartUpload\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"StoreLargeResults\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.29
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "................................                                         [100%]\n32 passed in 0.22s",
+      "duration_s": 0.8
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.13
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 17.4
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 121 passed, 0 failed, 16 skipped.",
+      "duration_s": 2.97
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_partition.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_iam_policy_document.worker_tracing: Reading...\ndata.aws_iam_policy_document.worker_assume_role: Reading...\ndata.aws_region.current: Reading...\ndata.aws_partition.current: Read complete after 0s [id=aws]\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.worker_assume_role: Read complete after 0s [id=666922913]\ndata.aws_iam_policy_document.worker_tracing: Read complete after 0s [id=3796702271]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\ndata.aws_iam_policy_document.api_assume_role: Reading...\ndata.aws_iam_policy_document.api_assume_role: Read complete after 0s [id=2426655886]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.archive_file.worker will be read during apply\n  # (depends on a resource or a module with changes pending)\n <= data \"archive_file\" \"worker\" {\n      + id                  = (known after apply)\n      + output_base64sha256 = (known after apply)\n      + output_base64sha512 = (known after apply)\n      + output_md5          = (known after apply)\n      + output_path         = \"./build/job_worker.zip\"\n      + output_sha          = (known after apply)\n      + output_sha256       = (known after apply)\n      + output_sha512       = (known after apply)\n      + output_size         = (known after apply)\n      + source_file         = \"./build/job_worker/index.py\"\n      + type                = \"zip\"\n    }\n\n  # data.aws_iam_policy_document.api will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"api\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ManageJobRecords\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"EnqueueJobs\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:ReceiveMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"InspectDeadLetterQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:GetObject\",\n              + \"s3:GetObjectVersion\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ReadJobResults\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"kms:DescribeKey\",\n              + \"kms:Encrypt\",\n              + \"kms:GenerateDataKey*\",\n              + \"kms:ReEncrypt*\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UseDataKey\"\n        }\n    }\n\n  # data.aws_iam_policy_document.worker will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"worker\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"WriteWorkerLogs\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:ChangeMessageVisibility\",\n              + \"sqs:DeleteMessage\",\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:ReceiveMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ConsumeJobQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"SendToDeadLetterQueue\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:ConditionCheckItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"UpdateJobRecords\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:AbortMultipartUpload\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"StoreLargeResults\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"",
+      "duration_s": 74.46
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 129,
+      "output_tokens": 1962,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2517,
+      "output_tokens": 39402,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2516,
+      "output_tokens": 35496,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.9678,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 23.2
+    },
+    {
+      "node": "generate_app",
+      "seconds": 362.8
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 348.9
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.2
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 20.4
+    },
+    {
+      "node": "deploy",
+      "seconds": 74.5
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 async_job_processor (fastapi); AWS resources: DynamoDB:jobs, SQS:job-queue, SQS:job-dlq, Lambda:job-worker, Lambda:job-worker-event-source-mapping, S3:job-results, IAM:job-worker-role, IAM:job-api-service-role, CloudWatch:job-worker-logs-and-metrics",
+    "\ud83d\udc0d Generated application code (initial): 8 files \u2014 FastAPI async job-processing service with a decoupled AWS layer. `app.py` exposes POST /jobs (persist + enqueue), GET /jobs (status filter + base64 pagination token), GET /jobs/{id}, /status, /result (inline or presigned S3 URL, 409 when not finished), DELETE /jobs/{id} (conditional cancel of QUEUED jobs), GET /jobs/failed/dead-letter and /health; all AWS access is injected via FastAPI dependencies so tests can override it. `storage.py` wraps DynamoDB (job table + status GSI, conditional updates, Decimal encode/decode), SQS (send, dead-letter peek with VisibilityTimeout=0, ping) and S3 (put_json, presigned URLs), always honouring AWS_ENDPOINT_URL and defaulting to us-east-1. `worker.py` is the SQS-triggered Lambda handler: it marks jobs RUNNING, executes echo/sum/multiply/word_count, stores large results in S3, and on failure marks FAILED (attempt 1) or DEAD_LETTER (attempt >= MAX_RECEIVE_COUNT=2) before raising so SQS retries once then redrives. `tests/test_app.py` covers every endpoint plus the worker using in-memory fakes \u2014 no network, no LocalStack. Requirements list only fastapi/uvicorn/boto3/pydantic (plus httpx which fastapi.testclient imports).",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the async_job_processor stack, one-to-one with the plan's aws_resources: a `jobs` DynamoDB table (PAY_PER_REQUEST, PITR, CMK SSE, `status-created_at-index` GSI), the `job-queue` SQS queue with a redrive policy of maxReceiveCount=2 (one retry) targeting the `job-dlq` queue (both SSE-KMS), a `job-results` S3 bucket (KMS encryption, versioning, full public-access block, lifecycle with abort-incomplete-multipart, access logging into a dedicated self-logging log bucket, TLS-only bucket policies), the `job-worker` Lambda packaged from inline Python via `local_file` + `archive_file` (X-Ray tracing, reserved concurrency, SQS dead_letter_config, KMS-encrypted env vars) bound to the queue by an event source mapping using ReportBatchItemFailures, a KMS-encrypted CloudWatch log group with 365-day retention plus DLQ-depth and worker-error alarms, and two least-privilege IAM roles/policies (worker: scoped SQS/DynamoDB/S3/KMS/logs; API service: DynamoDB read-write, SendMessage on the job queue, ReceiveMessage on the DLQ, GetObject on results). Provider is pinned to hashicorp/aws ~> 5.0 in versions.tf with project/managed-by/environment default_tags; only LocalStack Community services (S3, DynamoDB, SQS, Lambda, IAM, CloudWatch, KMS) are used, and the few impractical Checkov checks (S3 CRR, event notifications, Lambda VPC/code-signing, X-Ray wildcard resource) carry documented inline skips.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "models.py",
+    "storage.py",
+    "worker.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}
