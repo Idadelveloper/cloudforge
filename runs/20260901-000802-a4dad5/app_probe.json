@@ -1,0 +1,61 @@
+{
+  "run_id": "20260901-000802-a4dad5",
+  "probed_at": "2026-09-01T07:17:18.769806+00:00",
+  "framework": "fastapi",
+  "localstack_url": "http://localhost:4566",
+  "base_url": "http://127.0.0.1:60841",
+  "launched": true,
+  "results": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "probe_path": "/health",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/events",
+      "probe_path": "/events",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/events",
+      "probe_path": "/events",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/events/{event_id}",
+      "probe_path": "/events/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/events/{event_id}/registrations",
+      "probe_path": "/events/smoke-id/registrations",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/events/{event_id}/registrations",
+      "probe_path": "/events/smoke-id/registrations",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/registrations/{registration_id}",
+      "probe_path": "/registrations/smoke-id",
+      "status": "404",
+      "serving": true
+    }
+  ],
+  "serving_endpoints": 7,
+  "total_endpoints": 7
+}

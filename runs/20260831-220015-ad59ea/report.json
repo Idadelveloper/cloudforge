@@ -1,0 +1,290 @@
+{
+  "run_id": "20260831-220015-ad59ea",
+  "timestamp": "2026-09-01T05:06:19.890637+00:00",
+  "started_at": "2026-09-01T05:00:15.719139+00:00",
+  "finished_at": "2026-09-01T05:06:19.890637+00:00",
+  "wall_seconds": 364.2,
+  "node_seconds_sum": 445.3,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build an inventory REST API for a small shop. Staff can add products, list products, fetch one product, and adjust stock quantity up or down. Each product has a name, SKU, price and quantity. Products are stored in DynamoDB.",
+  "benchmark_id": "S5-inventory",
+  "tier": "simple",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "2fb852b6f42a7780a2f626512579a6c676dc30e1f246248dc19268d6be4402e1",
+    "complexity": {
+      "cloud_components": 1,
+      "aws_service_types": 1,
+      "api_operations": 4,
+      "domain_entities": 1,
+      "workflow_rules": 1,
+      "score": 7,
+      "rationale": "Single product store with a stateful stock-adjustment rule."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for products",
+      "POST endpoint creating a product",
+      "GET endpoints listing and fetching products",
+      "Endpoint adjusting stock quantity",
+      "Product model has name, SKU, price, quantity"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "shop_inventory_api",
+    "summary": "A FastAPI REST service for a small shop's inventory. Staff clients create products, list all products, fetch a single product by SKU, and apply positive or negative stock adjustments. All product records live in a single DynamoDB table that the service accesses directly with boto3; stock adjustments use conditional atomic updates so quantity can never go negative.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe used by the evaluation harness; reports service status and DynamoDB table reachability."
+      },
+      {
+        "method": "POST",
+        "path": "/products",
+        "purpose": "Create a new product with name, sku, price and initial quantity; rejects duplicate SKUs with 409."
+      },
+      {
+        "method": "GET",
+        "path": "/products",
+        "purpose": "List all products (DynamoDB Scan) with optional limit and pagination cursor."
+      },
+      {
+        "method": "GET",
+        "path": "/products/{sku}",
+        "purpose": "Fetch a single product by its SKU; 404 if not found."
+      },
+      {
+        "method": "POST",
+        "path": "/products/{sku}/adjust-stock",
+        "purpose": "Adjust stock quantity up or down by a signed delta using an atomic conditional DynamoDB update; 409 if the adjustment would make quantity negative, 404 if the SKU does not exist."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Product",
+        "fields": [
+          "sku: str (partition key, unique product identifier)",
+          "name: str",
+          "price: Decimal (non-negative, stored as DynamoDB Number)",
+          "quantity: int (non-negative stock on hand)",
+          "created_at: str (ISO-8601 UTC timestamp)",
+          "updated_at: str (ISO-8601 UTC timestamp)"
+        ]
+      },
+      {
+        "name": "ProductCreateRequest",
+        "fields": [
+          "sku: str (required, 1-64 chars)",
+          "name: str (required, 1-200 chars)",
+          "price: Decimal (required, >= 0)",
+          "quantity: int (optional, default 0, >= 0)"
+        ]
+      },
+      {
+        "name": "StockAdjustmentRequest",
+        "fields": [
+          "delta: int (required, non-zero; positive to add stock, negative to remove)",
+          "reason: str (optional free-text note)"
+        ]
+      },
+      {
+        "name": "ProductListResponse",
+        "fields": [
+          "items: list[Product]",
+          "next_cursor: str | None (opaque base64 LastEvaluatedKey)",
+          "count: int"
+        ]
+      },
+      {
+        "name": "ErrorResponse",
+        "fields": [
+          "detail: str",
+          "code: str"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "shop-inventory-products",
+        "justification": "Primary datastore explicitly required by the spec. Partition key 'sku' (S) serves the create, get-by-SKU and atomic stock-adjust operations; Scan backs the list endpoint. PAY_PER_REQUEST billing, no sort key needed since SKU uniquely identifies a product."
+      },
+      {
+        "service": "IAM",
+        "name": "shop-inventory-api-app-role",
+        "justification": "Execution identity assumed by the backend service so it can call DynamoDB with least privilege instead of broad credentials."
+      },
+      {
+        "service": "IAM",
+        "name": "shop-inventory-api-dynamodb-policy",
+        "justification": "Policy attached to the app role granting exactly PutItem, GetItem, UpdateItem, Scan and DescribeTable on the shop-inventory-products table ARN \u2014 the only AWS calls the application code makes."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/shop-inventory-api/application",
+        "justification": "Log group the application writes request and stock-adjustment audit logs to; gives staff/operators a place to trace inventory changes. Paired with a logs:CreateLogStream/PutLogEvents statement in the app policy."
+      }
+    ],
+    "assumptions": [
+      "SKU is the natural unique identifier and is used as the DynamoDB partition key, so products are addressed by SKU rather than a generated UUID.",
+      "No Lambda, SQS, SNS or API Gateway is planned: the spec describes only synchronous CRUD served by the self-hosted FastAPI service, with no asynchronous, scheduled or event-driven work and no notification requirement (e.g. low-stock alerts) to justify them.",
+      "Authentication is not specified; endpoints are left unauthenticated and 'staff' is treated as a trusted network caller. No Secrets Manager entry is needed because there are no third-party credentials.",
+      "Price is handled as a Decimal with 2-decimal precision and stored as a DynamoDB Number; currency is assumed to be a single implicit shop currency.",
+      "Stock adjustments accept a signed integer delta on one endpoint (rather than separate increment/decrement routes) and are applied with a DynamoDB conditional UpdateItem so concurrent adjustments cannot oversell or drive quantity below zero.",
+      "Listing uses Scan with a page limit (default 50, max 100) and an opaque cursor; catalogue size for a small shop makes a secondary index or search unnecessary.",
+      "Update and delete of product attributes were not requested and are therefore out of scope.",
+      "AWS region and endpoint are supplied via environment variables (AWS_REGION, AWS_ENDPOINT_URL, DYNAMODB_TABLE_NAME) so the service can point at LocalStack."
+    ]
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_partition.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Reading...\ndata.aws_partition.current: Read complete after 0s [id=aws]\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n\nTerraform will perform the following actions:\n\n  # aws_cloudwatch_log_group.application will be created\n  + resource \"aws_cloudwatch_log_group\" \"application\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + kms_key_id        = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/shop-inventory-api/application\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\" = \"/shop-inventory-api/application\"\n        }\n      + tags_all          = {\n          + \"Name\"       = \"/shop-inventory-api/application\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"shop-inventory-api\"\n        }\n    }\n\n  # aws_dynamodb_table.products will be created\n  + resource \"aws_dynamodb_table\" \"products\" {\n      + arn                         = (known after apply)\n      + billing_mode                = \"PAY_PER_REQUEST\"\n      + deletion_protection_enabled = false\n      + hash_key                    = \"sku\"\n      + id                          = (known after apply)\n      + name                        = \"shop-inventory-products\"\n      + read_capacity               = (known after apply)\n      + stream_arn                  = (known after apply)\n      + stream_label                = (known after apply)\n      + stream_view_type            = (known after apply)\n      + tags                        = {\n          + \"Name\" = \"shop-inventory-products\"\n        }\n      + tags_all                    = {\n          + \"Name\"       = \"shop-inventory-products\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"shop-inventory-api\"\n        }\n      + write_capacity              = (known after apply)\n\n      + attribute {\n          + name = \"sku\"\n          + type = \"S\"\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl {\n          + enabled        = false\n            # (1 unchanged attribute hidden)\n        }\n    }\n\n  # aws_iam_policy.app_dynamodb will be created\n  + resource \"aws_iam_policy\" \"app_dynamodb\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least-privilege access to the shop inventory products table and application log group\"\n      + id               = (known after apply)\n      + name             = \"shop-inventory-api-dynamodb-policy\"\n      + name_prefix      = (known after apply)\n      + path             = \"/\"\n      + policy           = (known after apply)\n      + policy_id        = (known after apply)\n      + tags             = {\n          + \"Name\" = \"shop-inventory-api-dynamodb-policy\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"shop-inventory-api-dynamodb-policy\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"shop-inventory-api\"\n        }\n    }\n\n  # aws_iam_role.app will be created\n  + resource \"aws_iam_role\" \"app\" {\n      + arn                   = (known after apply)\n      + assume_role_policy    = jsonencode(\n            {\n              + Statement = [\n                  + {\n                      + Action    = \"sts:AssumeRole\"\n                      + Effect    = \"Allow\"\n                      + Principal = {\n                          + Service = \"ec2.amazonaws.com\"\n                        }\n                      + Sid       = \"AllowEc2HostedServiceToAssume\"\n                    },\n                ]\n              + Version   = \"2012-10-17\"\n            }\n        )\n      + create_date           = (known after apply)\n      + description           = \"Execution identity for the shop inventory FastAPI service\"\n      + force_detach_policies = false\n      + id                    = (known after apply)\n      + managed_policy_arns   = (known after apply)\n      + max_session_duration  = 3600\n      + name                  = \"shop-inventory-api-app-role\"\n      + name_prefix           = (known after apply)\n      + path                  = \"/\"\n      + tags                  = {\n          + \"Name\" = \"shop-inventory-api-app-role\"\n        }\n      + tags_all              = {\n          + \"Name\"       = \"shop-inventory-api-app-role\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"shop-inventory-api\"\n        }\n      + unique_id             = (known after apply)\n\n      + inline_policy (known after apply)\n    }\n\n  # aws_iam_role_policy_attachment.app_dynamodb will be created\n  + resource \"aws_iam_role_policy_attachment\" \"app_dynamodb\" {\n      + id         = (known after apply)\n      + policy_arn = (known after apply)\n      + role       = \"shop-inventory-api-app-role\"\n    }\n\n  # aws_kms_alias.inventory will be created\n  + resource \"aws_kms_alias\" \"inventory\" {\n      + arn            = (known after apply)\n      + id             = (known after apply)\n      + name           = \"alias/shop-inventory-api\"\n      + name_prefix    = (known after apply)\n      + target_key_arn = (known after apply)\n      + target_key_id  = (known after apply)\n    }\n\n  # aws_kms_key.inventory will be created\n  + resource \"aws_kms_key\" \"inventory\" {\n      + arn                                = (known after apply)\n      + bypass_policy_lockout_safety_check = false\n      + customer_master_key_spec           = \"SYMMETRIC"
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.28
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "....................................                                     [100%]\n36 passed in 0.21s",
+      "duration_s": 0.72
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "[manager]\tWARNING\tTest in comment: container is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: deployments is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: must is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: bind is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: all is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: interfaces is not a test name or id, ignoring\n[tester]\tWARNING\tnosec encountered (B104), but no failed test on file ./app.py:201",
+      "duration_s": 0.12
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 12.37
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 26 passed, 0 failed, 0 skipped.",
+      "duration_s": 2.63
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_partition.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Reading...\ndata.aws_partition.current: Read complete after 0s [id=aws]\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n\nTerraform will perform the following actions:\n\n  # aws_cloudwatch_log_group.application will be created\n  + resource \"aws_cloudwatch_log_group\" \"application\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + kms_key_id        = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/shop-inventory-api/application\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\" = \"/shop-inventory-api/application\"\n        }\n      + tags_all          = {\n          + \"Name\"       = \"/shop-inventory-api/application\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"shop-inventory-api\"\n        }\n    }\n\n  # aws_dynamodb_table.products will be created\n  + resource \"aws_dynamodb_table\" \"products\" {\n      + arn                         = (known after apply)\n      + billing_mode                = \"PAY_PER_REQUEST\"\n      + deletion_protection_enabled = false\n      + hash_key                    = \"sku\"\n      + id                          = (known after apply)\n      + name                        = \"shop-inventory-products\"\n      + read_capacity               = (known after apply)\n      + stream_arn                  = (known after apply)\n      + stream_label                = (known after apply)\n      + stream_view_type            = (known after apply)\n      + tags                        = {\n          + \"Name\" = \"shop-inventory-products\"\n        }\n      + tags_all                    = {\n          + \"Name\"       = \"shop-inventory-products\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"shop-inventory-api\"\n        }\n      + write_capacity              = (known after apply)\n\n      + attribute {\n          + name = \"sku\"\n          + type = \"S\"\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl {\n          + enabled        = false\n            # (1 unchanged attribute hidden)\n        }\n    }\n\n  # aws_iam_policy.app_dynamodb will be created\n  + resource \"aws_iam_policy\" \"app_dynamodb\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least-privilege access to the shop inventory products table and application log group\"\n      + id               = (known after apply)\n      + name             = \"shop-inventory-api-dynamodb-policy\"\n      + name_prefix      = (known after apply)\n      + path             = \"/\"\n      + policy           = (known after apply)\n      + policy_id        = (known after apply)\n      + tags             = {\n          + \"Name\" = \"shop-inventory-api-dynamodb-policy\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"shop-inventory-api-dynamodb-policy\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"shop-inventory-api\"\n        }\n    }\n\n  # aws_iam_role.app will be created\n  + resource \"aws_iam_role\" \"app\" {\n      + arn                   = (known after apply)\n      + assume_role_policy    = jsonencode(\n            {\n              + Statement = [\n                  + {\n                      + Action    = \"sts:AssumeRole\"\n                      + Effect    = \"Allow\"\n                      + Principal = {\n                          + Service = \"ec2.amazonaws.com\"\n                        }\n                      + Sid       = \"AllowEc2HostedServiceToAssume\"\n                    },\n                ]\n              + Version   = \"2012-10-17\"\n            }\n        )\n      + create_date           = (known after apply)\n      + description           = \"Execution identity for the shop inventory FastAPI service\"\n      + force_detach_policies = false\n      + id                    = (known after apply)\n      + managed_policy_arns   = (known after apply)\n      + max_session_duration  = 3600\n      + name                  = \"shop-inventory-api-app-role\"\n      + name_prefix           = (known after apply)\n      + path                  = \"/\"\n      + tags                  = {\n          + \"Name\" = \"shop-inventory-api-app-role\"\n        }\n      + tags_all              = {\n          + \"Name\"       = \"shop-inventory-api-app-role\"\n          + \"managed-by\" = \"terraform\"\n          + \"project\"    = \"shop-inventory-api\"\n        }\n      + unique_id             = (known after apply)\n\n      + inline_policy (known after apply)\n    }\n\n  # aws_iam_role_policy_attachment.app_dynamodb will be created\n  + resource \"aws_iam_role_policy_attachment\" \"app_dynamodb\" {\n      + id         = (known after apply)\n      + policy_arn = (known after apply)\n      + role       = \"shop-inventory-api-app-role\"\n    }\n\n  # aws_kms_alias.inventory will be created\n  + resource \"aws_kms_alias\" \"inventory\" {\n      + arn            = (known after apply)\n      + id             = (known after apply)\n      + name           = \"alias/shop-inventory-api\"\n      + name_prefix    = (known after apply)\n      + target_key_arn = (known after apply)\n      + target_key_id  = (known after apply)\n    }\n\n  # aws_kms_key.inventory will be created\n  + resource \"aws_kms_key\" \"inventory\" {\n      + arn                                = (known after apply)\n      + bypass_policy_lockout_safety_check = false\n      + customer_master_key_spec           = \"SYMMETRIC",
+      "duration_s": 19.02
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 93,
+      "output_tokens": 1935,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2118,
+      "output_tokens": 32571,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2117,
+      "output_tokens": 7968,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.104,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 25.8
+    },
+    {
+      "node": "generate_app",
+      "seconds": 304.3
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 80.1
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.1
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 15.0
+    },
+    {
+      "node": "deploy",
+      "seconds": 19.0
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 shop_inventory_api (fastapi); AWS resources: DynamoDB:shop-inventory-products, IAM:shop-inventory-api-app-role, IAM:shop-inventory-api-dynamodb-policy, CloudWatch:/shop-inventory-api/application",
+    "\ud83d\udc0d Generated application code (initial): 8 files \u2014 FastAPI inventory service split into three layers: `models.py` (pydantic v2 request/response models with Decimal price handling), `storage.py` (a `ProductRepository` interface with a boto3 `DynamoProductRepository` \u2014 endpoint from `AWS_ENDPOINT_URL`, region default us-east-1, table from `DYNAMODB_TABLE_NAME` defaulting to `shop-inventory-products` \u2014 plus an `InMemoryProductRepository` for local/test use), and `app.py` (routes `/health`, `POST/GET /products`, `GET /products/{sku}`, `POST /products/{sku}/adjust-stock`, uniform `{detail, code}` error bodies). Creates use a conditional `PutItem` (409 on duplicate SKU); stock adjustments use an atomic conditional `UpdateItem` that cannot drive quantity negative (409) and 404s for unknown SKUs; listing uses Scan with limit + opaque base64 cursor. `tests/test_app.py` exercises every endpoint through `fastapi.testclient.TestClient` with the repository dependency overridden, and unit-tests the DynamoDB repository against a stubbed table plus monkeypatched `boto3.resource` \u2014 no network or LocalStack required. Only flask/fastapi/uvicorn/boto3/pydantic are used; dev-only tooling (pytest, httpx) is in requirements-dev.txt.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the shop_inventory_api plan, covering exactly the four planned AWS resources plus the customer-managed KMS key required to satisfy encryption checks.\n\nFiles:\n- versions.tf: terraform block with required_version and hashicorp/aws pinned to ~> 5.0, plus the provider with default_tags (project, managed-by).\n- variables.tf: defaults matching the plan's names (shop-inventory-products, shop-inventory-api-app-role, shop-inventory-api-dynamodb-policy, /shop-inventory-api/application), region us-east-1 for LocalStack.\n- main.tf:\n  * aws_dynamodb_table.products \u2014 PAY_PER_REQUEST, string partition key `sku`, point-in-time recovery enabled (CKV_AWS_28), server-side encryption with a customer managed CMK (CKV_AWS_119).\n  * aws_kms_key/aws_kms_alias \u2014 rotation enabled, explicit key policy scoped to the account root, the app role and the CloudWatch Logs service principal (no wildcard principals). It exists solely to encrypt the planned DynamoDB table and log group.\n  * aws_cloudwatch_log_group.application \u2014 named /shop-inventory-api/application, 365-day retention (CKV_AWS_66) and KMS encryption (CKV_AWS_158).\n  * aws_iam_role.app with an assume-role policy limited to a single service principal, aws_iam_policy with three least-privilege statements (PutItem/GetItem/UpdateItem/Scan/DescribeTable on the table ARN only; CreateLogStream/PutLogEvents/DescribeLogStreams on the log group ARN and its stream prefix; Encrypt/Decrypt/GenerateDataKey/DescribeKey on the single key ARN) and the attachment. No \"*\" actions and no \"*\" resources anywhere.\n- outputs.tf: table name/ARN/hash key, role name/ARN, policy ARN, log group name/ARN, KMS key ARN and region \u2014 the values the FastAPI service needs (DYNAMODB_TABLE_NAME, AWS_REGION).\n\nOnly LocalStack Community services are used (DynamoDB, IAM, CloudWatch Logs, KMS); no Lambda, S3, SQS, SNS, API Gateway, RDS/ECS/EKS/ElastiCache resources are created because the plan does not require them.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "models.py",
+    "storage.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

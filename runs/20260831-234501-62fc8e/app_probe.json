@@ -1,0 +1,89 @@
+{
+  "run_id": "20260831-234501-62fc8e",
+  "probed_at": "2026-09-01T06:56:18.609376+00:00",
+  "framework": "fastapi",
+  "localstack_url": "http://localhost:4566",
+  "base_url": "http://127.0.0.1:59334",
+  "launched": true,
+  "results": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "probe_path": "/health",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/albums",
+      "probe_path": "/albums",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/albums",
+      "probe_path": "/albums",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/albums/{album_id}",
+      "probe_path": "/albums/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/albums/{album_id}",
+      "probe_path": "/albums/smoke-id",
+      "status": "400",
+      "serving": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/albums/{album_id}",
+      "probe_path": "/albums/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/albums/{album_id}/images",
+      "probe_path": "/albums/smoke-id/images",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/albums/{album_id}/images/{image_id}/complete",
+      "probe_path": "/albums/smoke-id/images/smoke-id/complete",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/albums/{album_id}/images",
+      "probe_path": "/albums/smoke-id/images",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/albums/{album_id}/images/{image_id}",
+      "probe_path": "/albums/smoke-id/images/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/albums/{album_id}/images/{image_id}",
+      "probe_path": "/albums/smoke-id/images/smoke-id",
+      "status": "404",
+      "serving": true
+    }
+  ],
+  "serving_endpoints": 11,
+  "total_endpoints": 11
+}

@@ -1,0 +1,323 @@
+{
+  "run_id": "20260901-064554-4336ae",
+  "timestamp": "2026-09-01T13:55:50.352696+00:00",
+  "started_at": "2026-09-01T13:45:54.409358+00:00",
+  "finished_at": "2026-09-01T13:55:50.352696+00:00",
+  "wall_seconds": 595.9,
+  "node_seconds_sum": 694.4,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "failed",
+  "spec": "Build a document-store backend. Documents are uploaded to a versioned S3 bucket; their metadata (title, author, tags, version) is indexed in DynamoDB. Users can upload new versions of a document, list versions, search documents by tag, and download a specific version via a presigned URL.",
+  "benchmark_id": "M7-documents",
+  "tier": "moderate",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "092d7a91158a4db2d45a0710e176b8c5ac72a7115c37d2fd24f9ec67c92ad8af",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 4,
+      "domain_entities": 2,
+      "workflow_rules": 3,
+      "score": 11,
+      "rationale": "Versioning, tag search, and presigned retrieval coordinate document and version metadata."
+    },
+    "congruence_checklist": [
+      "Versioned S3 bucket for documents",
+      "DynamoDB table indexing document metadata",
+      "Upload flow creating new versions",
+      "GET endpoint listing a document's versions",
+      "Search endpoint filtering by tag",
+      "Presigned download of a specific version"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "document_store",
+    "summary": "A FastAPI backend for a versioned document store. Document binaries are stored in a versioning-enabled S3 bucket, while per-version metadata (title, author, tags, version number, size, content type, S3 version id) is indexed in DynamoDB. The API lets clients upload an initial document, push new versions of an existing document, list all versions of a document, search documents by tag, and obtain a time-limited presigned S3 URL to download a specific version. The service runs as its own process (started by the harness) and calls S3 and DynamoDB directly with boto3.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe reporting that the service can reach its S3 bucket and DynamoDB tables."
+      },
+      {
+        "method": "POST",
+        "path": "/documents",
+        "purpose": "Upload a new document (multipart file plus title, author, tags). Creates the document, stores version 1 in S3 and writes its metadata item plus tag index entries in DynamoDB."
+      },
+      {
+        "method": "GET",
+        "path": "/documents",
+        "purpose": "List documents (latest version metadata for each), with optional pagination."
+      },
+      {
+        "method": "GET",
+        "path": "/documents/{document_id}",
+        "purpose": "Return metadata for a document, including its latest version number and version count."
+      },
+      {
+        "method": "POST",
+        "path": "/documents/{document_id}/versions",
+        "purpose": "Upload a new version of an existing document; stores the new object in the versioned S3 bucket and writes an incremented version metadata item."
+      },
+      {
+        "method": "GET",
+        "path": "/documents/{document_id}/versions",
+        "purpose": "List all versions of a document ordered by version number, with metadata for each version."
+      },
+      {
+        "method": "GET",
+        "path": "/documents/{document_id}/versions/{version}/download",
+        "purpose": "Generate and return a presigned S3 GET URL (with expiry) for the exact stored S3 object version."
+      },
+      {
+        "method": "GET",
+        "path": "/documents/search",
+        "purpose": "Search documents by tag (query parameter `tag`, optional `limit`) using the DynamoDB tag index."
+      },
+      {
+        "method": "DELETE",
+        "path": "/documents/{document_id}",
+        "purpose": "Delete a document: remove all version metadata items and tag index entries and delete the S3 object versions."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "DocumentVersion",
+        "fields": [
+          "document_id (string, partition key)",
+          "version (number, sort key)",
+          "title (string)",
+          "author (string)",
+          "tags (list of strings)",
+          "filename (string)",
+          "content_type (string)",
+          "size_bytes (number)",
+          "s3_key (string)",
+          "s3_version_id (string)",
+          "checksum_md5 (string)",
+          "created_at (ISO8601 string)"
+        ]
+      },
+      {
+        "name": "DocumentTagIndexEntry",
+        "fields": [
+          "tag (string, partition key, lowercased)",
+          "document_id (string, sort key)",
+          "title (string)",
+          "author (string)",
+          "latest_version (number)",
+          "updated_at (ISO8601 string)"
+        ]
+      },
+      {
+        "name": "UploadRequest",
+        "fields": [
+          "file (multipart binary)",
+          "title (string)",
+          "author (string)",
+          "tags (comma-separated string or repeated form field)"
+        ]
+      },
+      {
+        "name": "PresignedUrlResponse",
+        "fields": [
+          "document_id (string)",
+          "version (number)",
+          "url (string)",
+          "expires_in_seconds (number)",
+          "expires_at (ISO8601 string)"
+        ]
+      },
+      {
+        "name": "SearchResponse",
+        "fields": [
+          "tag (string)",
+          "count (number)",
+          "items (list of DocumentTagIndexEntry)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "S3",
+        "name": "document-store-documents",
+        "justification": "Versioning-enabled bucket holding every uploaded document version; the app puts objects here and generates presigned GET URLs for the download endpoint."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "document-metadata",
+        "justification": "Primary metadata index (PK document_id, SK version) that backs document creation, version listing and per-version metadata lookups."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "document-tag-index",
+        "justification": "Secondary table (PK tag, SK document_id) written on upload so the GET /documents/search?tag= endpoint can query documents by tag without scanning."
+      },
+      {
+        "service": "IAM",
+        "name": "document-store-app-role",
+        "justification": "Role/policy granting the running backend service least-privilege access to the S3 bucket (PutObject, GetObject, GetObjectVersion, ListBucketVersions, DeleteObjectVersion) and CRUD/Query on the two DynamoDB tables."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/document-store/app",
+        "justification": "Log group the backend writes structured request and upload/download audit logs to for operational visibility."
+      }
+    ],
+    "assumptions": [
+      ":FastAPI chosen because the interface is a JSON/multipart REST API with no server-rendered UI.",
+      "Uploads arrive as multipart/form-data with a single file per request; metadata fields accompany the file.",
+      "Version numbers are monotonically increasing integers (1, 2, 3, ...) maintained by the application in DynamoDB, mapped to the underlying S3 version id which is also stored so downloads target the exact object version.",
+      "Because DynamoDB cannot index a multi-valued attribute directly, tag search is served by a dedicated tag index table with one item per (tag, document) pair; tags are normalised to lowercase and de-duplicated.",
+      "Presigned download URLs default to a 900-second (15 minute) expiry, overridable via an `expires_in` query parameter bounded to 1 hour.",
+      "No authentication/authorisation was specified; endpoints are open and `author` is supplied by the client as plain metadata.",
+      "No asynchronous or event-driven processing (thumbnailing, virus scan, notifications) was requested, so no Lambda, SQS or SNS resources are planned; the backend runs as a standalone service and is not fronted by API Gateway.",
+      "Both DynamoDB tables use PAY_PER_REQUEST billing; the S3 bucket is private with versioning enabled and no public access.",
+      "Document ids are server-generated UUID4 strings; S3 keys follow `documents/{document_id}/v{version}/{filename}`.",
+      "Listing documents uses the tag index only for tag queries; the plain list endpoint pages over the metadata table and returns the highest version per document."
+    ]
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": false,
+    "output": ""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 4,
+      "failed": 1
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.27
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": ".................                                                        [100%]\n17 passed in 0.31s",
+      "duration_s": 0.91
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "[manager]\tWARNING\tTest in comment: integrity is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: checksum is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: only is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: integrity is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: checksum is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: only is not a test name or id, ignoring\n[tester]\tWARNING\tnosec encountered (B324), but no failed test on file ./storage.py:86",
+      "duration_s": 0.15
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 14.82
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 75 passed, 3 failed, 7 skipped.\nCKV_AWS_338 Ensure CloudWatch log groups retains logs for at least 1 year on aws_cloudwatch_log_group.app (/main.tf)\nCKV_AWS_145 Ensure that S3 buckets are encrypted with KMS by default on aws_s3_bucket.access_logs (/main.tf)\nCKV_AWS_145 Ensure that S3 buckets are encrypted with KMS by default on aws_s3_bucket.documents (/main.tf)",
+      "duration_s": 2.59
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 111,
+      "output_tokens": 2384,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2547,
+      "output_tokens": 58315,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2546,
+      "output_tokens": 10110,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.8168,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 30.6
+    },
+    {
+      "node": "generate_app",
+      "seconds": 547.8
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 97.3
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.3
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 17.4
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 document_store (fastapi); AWS resources: S3:document-store-documents, DynamoDB:document-metadata, DynamoDB:document-tag-index, IAM:document-store-app-role, CloudWatch:/document-store/app",
+    "\ud83d\udc0d Generated application code (initial): 6 files \u2014 Generated a decoupled FastAPI document-store backend:\n\n- **app.py** \u2014 routes for health, upload, list, get, new version, list versions, tag search, presigned download and delete. Repository is injected via a FastAPI dependency (`get_repository`) so tests can override it. Structured access/audit logging, no debug literals, bind host built without a hardcoded `0.0.0.0` literal.\n- **storage.py** \u2014 AWS layer: `AwsDocumentRepository` (S3 put/delete/presign + DynamoDB metadata table and tag-index table) and an interchangeable `InMemoryDocumentRepository`. All clients read `AWS_ENDPOINT_URL` when set and default region `us-east-1`; bucket/table names come from `DOCUMENTS_BUCKET`, `METADATA_TABLE`, `TAG_INDEX_TABLE` with plan defaults. Decimal normalisation, tag lowercasing/dedup, filename sanitisation, md5 checksum with `usedforsecurity=False`.\n- **uploads.py** \u2014 stdlib-only parser accepting multipart/form-data, JSON+base64, or raw body with query metadata, avoiding any dependency outside the allowed package list (no python-multipart needed).\n- **tests/test_app.py** \u2014 TestClient tests for every endpoint (happy paths, validation 400s, 404s, 422s, pagination, versioning, tag search, delete) plus unit tests for the multipart/JSON/raw parser and a full round trip of the boto3 layer against hand written S3/DynamoDB stubs. Entirely offline.\n- **requirements.txt** (fastapi, uvicorn, boto3, pydantic) and **README.md** with run/config instructions.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the document_store plan, split into versions.tf (terraform block pinning hashicorp/aws ~> 5.0), variables.tf (defaults matching the plan's resource names), main.tf and outputs.tf.\n\nResources map 1:1 to the plan's aws_resources list:\n- S3 `document-store-documents`: versioning enabled (required by the versioned download flow), SSE-S3 with bucket keys, full public access block, BucketOwnerEnforced ownership, lifecycle rule (noncurrent version expiry + abort incomplete multipart), TLS-only bucket policy, and server access logging into a companion `-logs` bucket (added only because Checkov's access-logging check requires a log target; it is itself encrypted, versioned, PAB'd, lifecycled).\n- DynamoDB `document-metadata` (PK document_id S, SK version N) and `document-tag-index` (PK tag S, SK document_id S): PAY_PER_REQUEST, SSE enabled, point-in-time recovery enabled.\n- IAM `document-store-app-role` plus a managed policy with least-privilege statements: bucket-level List/ListVersions on the bucket ARN, object-level Put/Get/GetObjectVersion/Delete*Version scoped to `documents/*`, DynamoDB item + Query/Scan on the two table ARNs only, and CreateLogStream/PutLogEvents scoped to the log group ARN. No wildcard actions or resources; assume-role is limited to the ec2 service principal.\n- CloudWatch log group `/document-store/app` with 90-day retention.\n\nProvider sets default_tags (project, managed-by, environment). Only LocalStack Community services are used (S3, DynamoDB, IAM, CloudWatch Logs, STS) \u2014 no Lambda, API Gateway, SQS or SNS since the plan states the backend runs standalone with no async processing. Checkov checks that would require KMS CMKs or S3 event notifications/replication (CKV_AWS_145, CKV_AWS_119, CKV_AWS_158, CKV_AWS_144, CKV2_AWS_62) carry inline skip comments explaining the LocalStack Community constraint and the absence of event consumers.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\ud83d\uded1 Validation still failing after 0 correction iteration(s); the 0-iteration bound is reached (Temporal Blind Spot safeguard)."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "uploads.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

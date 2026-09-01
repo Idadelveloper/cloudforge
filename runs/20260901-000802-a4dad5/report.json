@@ -1,0 +1,352 @@
+{
+  "run_id": "20260901-000802-a4dad5",
+  "timestamp": "2026-09-01T07:15:51.420702+00:00",
+  "started_at": "2026-09-01T07:08:02.603711+00:00",
+  "finished_at": "2026-09-01T07:15:51.420702+00:00",
+  "wall_seconds": 468.8,
+  "node_seconds_sum": 550.0,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build an event-registration service. Organisers create events with a title, date and capacity; attendees register for an event until it is full, after which registrations are rejected. Every successful registration is also published to an SQS queue for downstream processing. Events and registrations are stored in DynamoDB.",
+  "benchmark_id": "M4-registration",
+  "tier": "moderate",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "23ecd4f37b886629cc49ee8c93e58962efab80f573aa66a1fa2f7b905f8391da",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 3,
+      "domain_entities": 2,
+      "workflow_rules": 2,
+      "score": 9,
+      "rationale": "Adds a capacity invariant and asynchronous registration event to two related entities."
+    },
+    "congruence_checklist": [
+      "DynamoDB storage for events and registrations",
+      "SQS queue receiving registration events",
+      "POST endpoint creating an event",
+      "POST endpoint registering an attendee",
+      "Capacity limit enforced with rejection when full",
+      "GET endpoint listing an event's registrations"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "event_registration_service",
+    "summary": "A FastAPI service for event registration. Organisers create and list events (title, date, capacity); attendees register for an event while capacity remains, and registrations are rejected with 409 once the event is full. Events and registrations are persisted in DynamoDB (two tables), and every successful registration is published as a JSON message to an SQS queue for downstream processing. The service runs as a standalone process and talks to DynamoDB and SQS directly via boto3.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe reporting service status and reachability of DynamoDB/SQS configuration."
+      },
+      {
+        "method": "POST",
+        "path": "/events",
+        "purpose": "Create an event with title, date and capacity; returns the generated event_id and initial registered_count of 0."
+      },
+      {
+        "method": "GET",
+        "path": "/events",
+        "purpose": "List all events with their capacity and current registered count."
+      },
+      {
+        "method": "GET",
+        "path": "/events/{event_id}",
+        "purpose": "Fetch a single event including remaining capacity; 404 if it does not exist."
+      },
+      {
+        "method": "POST",
+        "path": "/events/{event_id}/registrations",
+        "purpose": "Register an attendee (name, email) for the event. Atomically increments registered_count only while it is below capacity; returns 201 with the registration, 409 if the event is full or the attendee already registered, 404 if the event is unknown. On success publishes a registration message to SQS."
+      },
+      {
+        "method": "GET",
+        "path": "/events/{event_id}/registrations",
+        "purpose": "List the registrations recorded for a given event."
+      },
+      {
+        "method": "GET",
+        "path": "/registrations/{registration_id}",
+        "purpose": "Fetch a single registration record by its id."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Event",
+        "fields": [
+          "event_id: str (uuid4, partition key)",
+          "title: str",
+          "date: str (ISO 8601 date or datetime)",
+          "capacity: int (>0)",
+          "registered_count: int (default 0)",
+          "created_at: str (ISO 8601 UTC timestamp)"
+        ]
+      },
+      {
+        "name": "Registration",
+        "fields": [
+          "event_id: str (partition key)",
+          "registration_id: str (uuid4, sort key)",
+          "attendee_name: str",
+          "attendee_email: str",
+          "status: str ('confirmed')",
+          "created_at: str (ISO 8601 UTC timestamp)"
+        ]
+      },
+      {
+        "name": "RegistrationEvent",
+        "fields": [
+          "event_type: str ('registration.created')",
+          "registration_id: str",
+          "event_id: str",
+          "event_title: str",
+          "attendee_name: str",
+          "attendee_email: str",
+          "occurred_at: str (ISO 8601 UTC timestamp)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "events",
+        "justification": "Stores organiser-created events (title, date, capacity) and the registered_count counter used for the conditional capacity check on registration. Partition key: event_id."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "registrations",
+        "justification": "Stores each attendee registration and supports listing registrations per event. Partition key: event_id, sort key: registration_id, plus a GSI on attendee_email for duplicate detection."
+      },
+      {
+        "service": "SQS",
+        "name": "registration-events",
+        "justification": "The spec requires every successful registration to be published to a queue for downstream processing; the application calls SendMessage after committing the registration."
+      },
+      {
+        "service": "SQS",
+        "name": "registration-events-dlq",
+        "justification": "Redrive target for the registration queue so messages that downstream consumers repeatedly fail to process are retained rather than lost."
+      },
+      {
+        "service": "IAM",
+        "name": "event-registration-service-role",
+        "justification": "Least-privilege role/policy granting the backend service GetItem/PutItem/UpdateItem/Query/Scan on the two DynamoDB tables and SendMessage on the registration queue."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/cloudforge/event-registration-service",
+        "justification": "Log group for the service's application logs (registration outcomes, capacity rejections, SQS publish failures)."
+      }
+    ],
+    "assumptions": [
+      "No authentication or authorisation is specified; all endpoints are open and the 'organiser' vs 'attendee' distinction is not enforced in code.",
+      "Capacity enforcement uses a single DynamoDB UpdateItem with a conditional expression (registered_count < capacity) to avoid overselling under concurrent requests; a ConditionalCheckFailedException maps to HTTP 409.",
+      "No downstream consumer was specified, so no Lambda or API Gateway is planned \u2014 the queue is left for an external consumer and the backend only produces messages.",
+      "SQS messages are plain JSON strings on a standard (non-FIFO) queue; publish happens after the DynamoDB write, and a publish failure is logged without rolling back the registration.",
+      "Event date is accepted and stored as an ISO 8601 string; past dates are not rejected.",
+      "Duplicate registration is defined as the same attendee_email for the same event and is rejected with 409.",
+      "Events and registrations are never deleted; no cancellation endpoints were requested.",
+      "Listing endpoints return all items without pagination, which is adequate for the expected small data volumes.",
+      "AWS endpoints, table names and queue URL are supplied via environment variables (e.g. AWS_ENDPOINT_URL, EVENTS_TABLE, REGISTRATIONS_TABLE, REGISTRATION_QUEUE_URL) so the service works against LocalStack.",
+      "No secrets are required by the application, so Secrets Manager is not provisioned."
+    ]
+  },
+  "max_iterations": 3,
+  "iterations_used": 1,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_iam_policy_document.service_assume_role: Reading...\ndata.aws_iam_policy_document.service_assume_role: Read complete after 0s [id=1332696937]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.service_permissions will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"service_permissions\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"EventsTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"RegistrationsTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"PublishRegistrationEvents\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"WriteApplicationLogs\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.service will be created\n  + resource \"aws_cloudwatch_log_group\" \"service\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/cloudforge/event-registration-service\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"      = \"/cloudforge/event-registration-service\"\n          + \"component\" = \"application-logs\"\n        }\n      + tags_all          = {\n          + \"Name\"       = \"/cloudforge/event-registration-service\"\n          + \"component\"  = \"application-logs\"\n          + \"managed-by\" = \"cloudforge\"\n          + \"project\"    = \"event_registration_service\"\n        }\n    }\n\n  # aws_dynamodb_table.events will be created\n  + resource \"aws_dynamodb_table\" \"events\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"event_id\"\n      + id               = (known after apply)\n      + name             = \"events\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\"      = \"events\"\n          + \"component\" = \"events-store\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"events\"\n          + \"component\"  = \"events-store\"\n          + \"managed-by\" = \"cloudforge\"\n          + \"project\"    = \"event_registration_service\"\n        }\n      + write_capacity   = (known after apply)\n\n      + attribute {\n          + name = \"event_id\"\n          + type = \"S\"\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl (known after apply)\n    }\n\n  # aws_dynamodb_table.registrations will be created\n  + resource \"aws_dynamodb_table\" \"registrations\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"event_id\"\n      + id               = (known after apply)\n      + name             = \"registrations\"\n      + range_key        = \"registration_id\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\"      = \"registrations\"\n          + \"component\" = \"registrations-store\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"registrations\"\n          + \"component\"  = \"registrations-store\"\n          + \"managed-by\" = \"cloudforge\"\n          + \"project\"    = \"event_registration_service\"\n        }\n      + write_capacity   = (known after apply)\n\n      + attribute {\n          + name = \"attendee_email\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"event_id\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"registration_id\"\n          + type = \"S\"\n        }\n\n      + global_secondary_index {\n          + hash_key           = \"attendee_email\"\n          + name               = \"attendee_email-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"event_id\"\n          + read_capacity      = (known after apply)\n          + w"
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 4,
+      "failed": 1
+    },
+    {
+      "iteration": 1,
+      "passed": 3,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.25
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "...........................                                              [100%]\n=============================== warnings summary ===============================\nruns/20260901-000802-a4dad5/app/tests/test_app.py::test_create_event_rejects_blank_title\nruns/20260901-000802-a4dad5/app/tests/test_app.py::test_registration_blank_name\n  /Users/idadelphine/Desktop/personal/school/cloudforge/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py:1033: StarletteDeprecationWarning: 'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead.\n    result = context.run(func, *args)\n\nruns/20260901-000802-a4dad5/app/tests/test_app.py::test_registration_invalid_email\n  /Users/idadelphine/Desktop/personal/school/cloudforge/runs/20260901-000802-a4dad5/app/app.py:191: StarletteDeprecationWarning: 'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead.\n    email = _validated_email(payload.attendee_email)\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n27 passed, 3 warnings in 0.23s",
+      "duration_s": 0.72
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.12
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 15.59
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 40 passed, 1 failed, 5 skipped.\nCKV_AWS_338 Ensure CloudWatch log groups retains logs for at least 1 year on aws_cloudwatch_log_group.service (/main.tf)",
+      "duration_s": 2.51
+    },
+    {
+      "iteration": 1,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 13.36
+    },
+    {
+      "iteration": 1,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 41 passed, 0 failed, 5 skipped.",
+      "duration_s": 2.38
+    },
+    {
+      "iteration": 1,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_iam_policy_document.service_assume_role: Reading...\ndata.aws_iam_policy_document.service_assume_role: Read complete after 0s [id=1332696937]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.service_permissions will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"service_permissions\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"EventsTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"RegistrationsTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"sqs:GetQueueAttributes\",\n              + \"sqs:GetQueueUrl\",\n              + \"sqs:SendMessage\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"PublishRegistrationEvents\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"WriteApplicationLogs\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.service will be created\n  + resource \"aws_cloudwatch_log_group\" \"service\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/cloudforge/event-registration-service\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"      = \"/cloudforge/event-registration-service\"\n          + \"component\" = \"application-logs\"\n        }\n      + tags_all          = {\n          + \"Name\"       = \"/cloudforge/event-registration-service\"\n          + \"component\"  = \"application-logs\"\n          + \"managed-by\" = \"cloudforge\"\n          + \"project\"    = \"event_registration_service\"\n        }\n    }\n\n  # aws_dynamodb_table.events will be created\n  + resource \"aws_dynamodb_table\" \"events\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"event_id\"\n      + id               = (known after apply)\n      + name             = \"events\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\"      = \"events\"\n          + \"component\" = \"events-store\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"events\"\n          + \"component\"  = \"events-store\"\n          + \"managed-by\" = \"cloudforge\"\n          + \"project\"    = \"event_registration_service\"\n        }\n      + write_capacity   = (known after apply)\n\n      + attribute {\n          + name = \"event_id\"\n          + type = \"S\"\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl (known after apply)\n    }\n\n  # aws_dynamodb_table.registrations will be created\n  + resource \"aws_dynamodb_table\" \"registrations\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"event_id\"\n      + id               = (known after apply)\n      + name             = \"registrations\"\n      + range_key        = \"registration_id\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\"      = \"registrations\"\n          + \"component\" = \"registrations-store\"\n        }\n      + tags_all         = {\n          + \"Name\"       = \"registrations\"\n          + \"component\"  = \"registrations-store\"\n          + \"managed-by\" = \"cloudforge\"\n          + \"project\"    = \"event_registration_service\"\n        }\n      + write_capacity   = (known after apply)\n\n      + attribute {\n          + name = \"attendee_email\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"event_id\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"registration_id\"\n          + type = \"S\"\n        }\n\n      + global_secondary_index {\n          + hash_key           = \"attendee_email\"\n          + name               = \"attendee_email-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"event_id\"\n          + read_capacity      = (known after apply)\n          + w",
+      "duration_s": 81.08
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 106,
+      "output_tokens": 1795,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2233,
+      "output_tokens": 32158,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2232,
+      "output_tokens": 8196,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 7607,
+      "output_tokens": 5421,
+      "cache_read_input_tokens": 937,
+      "cache_creation_input_tokens": 0
+    }
+  ],
+  "estimated_cost_usd": 1.2711,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 21.0
+    },
+    {
+      "node": "generate_app",
+      "seconds": 287.2
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 80.1
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.1
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 18.1
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 45.7
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 15.7
+    },
+    {
+      "node": "deploy",
+      "seconds": 81.1
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 event_registration_service (fastapi); AWS resources: DynamoDB:events, DynamoDB:registrations, SQS:registration-events, SQS:registration-events-dlq, IAM:event-registration-service-role, CloudWatch:/cloudforge/event-registration-service",
+    "\ud83d\udc0d Generated application code (initial): 7 files \u2014 FastAPI event-registration service split into `app.py` (routes, pydantic models, dependency-injected backends) and `storage.py` (Repository/Publisher interfaces with DynamoDB + SQS implementations and in-memory equivalents). Capacity is enforced with a conditional DynamoDB UpdateItem (`registered_count < capacity`) mapping ConditionalCheckFailed to 409; duplicates by email also return 409; unknown events return 404. Successful registrations publish a JSON `registration.created` message to SQS (failures logged, request still succeeds), and a failed registration write releases the reserved capacity. All AWS clients read AWS_ENDPOINT_URL and default to us-east-1, with table/queue names from env vars. Tests use FastAPI TestClient with dependency overrides plus hand-written fakes for DynamoDB tables and the SQS client, so nothing touches the network.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the event-registration service, mapping 1:1 to the plan's aws_resources: two DynamoDB tables (events with event_id PK; registrations with event_id/registration_id keys plus an attendee_email GSI for duplicate detection), both with point-in-time recovery and server-side encryption; a standard SQS queue registration-events with SQS-managed SSE and a redrive policy to registration-events-dlq (plus a redrive_allow_policy on the DLQ); a CloudWatch log group /cloudforge/event-registration-service with 90-day retention; and a least-privilege IAM role event-registration-service-role whose policy scopes DynamoDB Get/Put/Update/Query/Scan to the two table ARNs and the GSI, SendMessage to the registration queue ARN only, and log writes to the specific log group (no wildcard actions or resources). Files: versions.tf (terraform block pinning hashicorp/aws ~> 5.0), variables.tf (defaults matching plan resource names), main.tf (provider with project/managed-by default_tags plus resources), outputs.tf (table names, queue URLs/ARNs, role ARN, log group for env-var wiring). Only LocalStack Community services are used; no KMS/Lambda/API Gateway, with documented checkov skips where CMK encryption is unavailable in LocalStack.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\u267b\ufe0f Validation failed for: iac \u2014 starting correction.",
+    "\ud83d\udd27 Correction iteration 1/3: feeding error logs back with the original specification.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (correction 1): 4 files \u2014 Fixed the single Checkov failure (CKV_AWS_338) by raising the CloudWatch log group retention default from 90 days to 365 days (at least one year) in variables.tf, updating its description accordingly. No resources were added or removed; all other files are unchanged and returned in full. The stack still provisions exactly the plan's resources: the events and registrations DynamoDB tables (PITR + SSE, plus the attendee_email GSI), the registration-events SQS queue with its DLQ and redrive policies (SQS-managed SSE), the application CloudWatch log group, and a least-privilege IAM role/policy scoped to the two tables, the queue ARN and the log group.",
+    "\ud83d\udd0e IaC validation (iteration 1): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

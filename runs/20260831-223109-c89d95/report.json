@@ -1,0 +1,326 @@
+{
+  "run_id": "20260831-223109-c89d95",
+  "timestamp": "2026-09-01T05:38:02.407243+00:00",
+  "started_at": "2026-09-01T05:31:09.862384+00:00",
+  "finished_at": "2026-09-01T05:38:02.407243+00:00",
+  "wall_seconds": 412.5,
+  "node_seconds_sum": 514.3,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build a file-sharing backend. Clients can upload files to S3 via presigned URLs, list their files, and delete them. File metadata (owner, filename, size, upload time) is tracked in DynamoDB. Include an endpoint that returns storage usage per owner.",
+  "benchmark_id": "M1-fileshare",
+  "tier": "moderate",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "7db867181e5f4c77aef96e5dc8d5d24ac080a32a952c4aba2539075a9a82d285",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 4,
+      "domain_entities": 1,
+      "workflow_rules": 2,
+      "score": 9,
+      "rationale": "Object storage and metadata store coupled through presigned transfer and usage aggregation."
+    },
+    "congruence_checklist": [
+      "S3 bucket for file storage",
+      "DynamoDB table for file metadata",
+      "Endpoint issuing presigned upload URLs",
+      "GET endpoint listing a client's files",
+      "DELETE endpoint removing a file",
+      "Endpoint aggregating storage usage per owner"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "file_share_backend",
+    "summary": "A FastAPI service that brokers file sharing through S3 and DynamoDB. Clients request a presigned S3 PUT URL to upload a file directly to the bucket, then confirm the upload so metadata (owner, filename, size, upload time, S3 key) is recorded in DynamoDB. Clients can list their own files, obtain presigned download URLs, delete files (removing both the S3 object and the metadata record), and query aggregate storage usage per owner. The API is called directly by client applications over HTTP; the service itself runs as a standalone process and uses the AWS SDK (boto3) to talk to S3 and DynamoDB.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness check reporting service status and connectivity to S3/DynamoDB."
+      },
+      {
+        "method": "POST",
+        "path": "/files/upload-url",
+        "purpose": "Generate a presigned S3 PUT URL for a new file; returns file_id, s3_key, upload_url and expiry, and creates a pending metadata record in DynamoDB."
+      },
+      {
+        "method": "POST",
+        "path": "/files/{file_id}/confirm",
+        "purpose": "Confirm an upload completed; verifies the object exists in S3, records actual size and upload time, and marks the metadata record as available."
+      },
+      {
+        "method": "GET",
+        "path": "/files",
+        "purpose": "List files for an owner (owner supplied as a query parameter), with optional pagination."
+      },
+      {
+        "method": "GET",
+        "path": "/files/{file_id}",
+        "purpose": "Retrieve metadata for a single file."
+      },
+      {
+        "method": "GET",
+        "path": "/files/{file_id}/download-url",
+        "purpose": "Generate a presigned S3 GET URL so the client can download the file directly from S3."
+      },
+      {
+        "method": "DELETE",
+        "path": "/files/{file_id}",
+        "purpose": "Delete the S3 object and its DynamoDB metadata record."
+      },
+      {
+        "method": "GET",
+        "path": "/usage",
+        "purpose": "Return storage usage (total bytes and file count) for every owner, or for a single owner when the owner query parameter is supplied."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "FileMetadata",
+        "fields": [
+          "file_id (string, partition key)",
+          "owner (string, GSI partition key)",
+          "filename (string)",
+          "content_type (string)",
+          "size_bytes (number)",
+          "s3_key (string)",
+          "status (string: pending|available)",
+          "upload_time (ISO-8601 string, GSI sort key)",
+          "created_at (ISO-8601 string)"
+        ]
+      },
+      {
+        "name": "UploadUrlRequest",
+        "fields": [
+          "owner (string, required)",
+          "filename (string, required)",
+          "content_type (string, optional, default application/octet-stream)",
+          "size_bytes (number, optional declared size)"
+        ]
+      },
+      {
+        "name": "UploadUrlResponse",
+        "fields": [
+          "file_id (string)",
+          "s3_key (string)",
+          "upload_url (string)",
+          "expires_in_seconds (number)"
+        ]
+      },
+      {
+        "name": "DownloadUrlResponse",
+        "fields": [
+          "file_id (string)",
+          "download_url (string)",
+          "expires_in_seconds (number)"
+        ]
+      },
+      {
+        "name": "FileListResponse",
+        "fields": [
+          "owner (string)",
+          "items (list of FileMetadata)",
+          "count (number)",
+          "next_token (string, optional)"
+        ]
+      },
+      {
+        "name": "OwnerUsage",
+        "fields": [
+          "owner (string)",
+          "file_count (number)",
+          "total_bytes (number)"
+        ]
+      },
+      {
+        "name": "UsageResponse",
+        "fields": [
+          "owners (list of OwnerUsage)",
+          "total_bytes (number)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "S3",
+        "name": "file-share-files",
+        "justification": "Stores the uploaded file objects; the application generates presigned PUT/GET URLs against this bucket and deletes objects on file deletion. Versioning off, private ACL, CORS configured so browser clients can PUT directly."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "file-share-metadata",
+        "justification": "Holds file metadata records (owner, filename, size, upload time, s3_key, status) keyed by file_id, with a global secondary index owner-index (owner hash, upload_time range) used by the list-files and per-owner usage endpoints."
+      },
+      {
+        "service": "IAM",
+        "name": "file-share-app-role",
+        "justification": "Execution role/policy granting the backend service least-privilege access: s3:PutObject/GetObject/DeleteObject/HeadObject on the bucket and dynamodb:PutItem/GetItem/UpdateItem/DeleteItem/Query/Scan on the table and its GSI."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/file-share/app-logs",
+        "justification": "Log group the application writes structured request and error logs to for operational visibility of upload/delete activity."
+      }
+    ],
+    "assumptions": [
+      "No Lambda or API Gateway is planned: the spec describes a synchronous REST API with no queue worker, scheduled job, or S3 event processing, and the backend runs as its own service.",
+      "Owner identity is not authenticated; the owner is passed by the client as a request body field or query parameter and is trusted. No Secrets Manager entry is needed because no third-party credentials are involved.",
+      "Uploads go directly from the client to S3 via presigned PUT URLs; the backend never streams file bytes. A confirm step is required to capture the real object size via S3 HeadObject.",
+      "Presigned URLs expire after 900 seconds (15 minutes) by default, configurable via environment variable.",
+      "S3 object keys are namespaced as {owner}/{file_id}/{filename} to keep per-owner objects grouped and avoid collisions.",
+      "Per-owner usage is computed on demand by querying the owner-index GSI (or scanning and grouping when no owner is given) rather than maintaining a separate counter table; dataset size is assumed modest.",
+      "DynamoDB tables use PAY_PER_REQUEST billing mode for LocalStack compatibility and simplicity.",
+      "Deleting a file is idempotent: a missing S3 object or metadata record returns 404 only when the metadata record does not exist.",
+      "AWS endpoints, region, bucket name, and table name are supplied to the application through environment variables so it can point at LocalStack."
+    ]
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_iam_policy_document.app_assume_role: Reading...\ndata.aws_partition.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_partition.current: Read complete after 0s [id=aws]\ndata.aws_iam_policy_document.app_assume_role: Read complete after 0s [id=3343061468]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.access_logs_bucket will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"access_logs_bucket\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:*\",\n            ]\n          + effect    = \"Deny\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"DenyInsecureTransport\"\n\n          + condition {\n              + test     = \"Bool\"\n              + values   = [\n                  + \"false\",\n                ]\n              + variable = \"aws:SecureTransport\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"*\",\n                ]\n              + type        = \"AWS\"\n            }\n        }\n      + statement {\n          + actions   = [\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"AllowS3ServerAccessLogDelivery\"\n\n          + condition {\n              + test     = \"StringEquals\"\n              + values   = [\n                  + \"000000000000\",\n                ]\n              + variable = \"aws:SourceAccount\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"logging.s3.amazonaws.com\",\n                ]\n              + type        = \"Service\"\n            }\n        }\n    }\n\n  # data.aws_iam_policy_document.app will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:AbortMultipartUpload\",\n              + \"s3:DeleteObject\",\n              + \"s3:GetObject\",\n              + \"s3:GetObjectVersion\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"FileObjectAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:GetBucketLocation\",\n              + \"s3:ListBucket\",\n              + \"s3:ListBucketMultipartUploads\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"FileBucketListing\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:BatchGetItem\",\n              + \"dynamodb:BatchWriteItem\",\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"MetadataTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogging\"\n        }\n    }\n\n  # data.aws_iam_policy_document.files_bucket will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"files_bucket\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:*\",\n            ]\n          + effect    = \"Deny\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"DenyInsecureTransport\"\n\n          + condition {\n              + test     = \"Bool\"\n              + values   = [\n                  + \"false\",\n                ]\n              + variable = \"aws:SecureTransport\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"*\",\n                ]\n              + type        = \"AWS\"\n            }\n        }\n    }\n\n  # aws_cloudwatch_log_group.app will be created\n  + resource \"aws_cloudwatch_log_group\" \"app\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/file-share/app-logs\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\" = \"/file-share/app-logs\"\n        }\n      + tags_all          = {\n          + \"Environment\" = \"dev\"\n          + \"ManagedBy\"   = \"terraform\"\n          + \"Name\"        = \"/file-share/app-logs\"\n          + \"Project\"     = \"file_share_backend\"\n        }\n    }\n\n  # aws_dynamodb_table.metadata will be created\n  + resource \"aws_dynamodb_table\" \"metadata\" {\n      + arn                "
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.29
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "........................                                                 [100%]\n24 passed in 0.32s",
+      "duration_s": 0.94
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.13
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 15.3
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 86 passed, 0 failed, 9 skipped.",
+      "duration_s": 2.67
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_iam_policy_document.app_assume_role: Reading...\ndata.aws_partition.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_partition.current: Read complete after 0s [id=aws]\ndata.aws_iam_policy_document.app_assume_role: Read complete after 0s [id=3343061468]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.access_logs_bucket will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"access_logs_bucket\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:*\",\n            ]\n          + effect    = \"Deny\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"DenyInsecureTransport\"\n\n          + condition {\n              + test     = \"Bool\"\n              + values   = [\n                  + \"false\",\n                ]\n              + variable = \"aws:SecureTransport\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"*\",\n                ]\n              + type        = \"AWS\"\n            }\n        }\n      + statement {\n          + actions   = [\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"AllowS3ServerAccessLogDelivery\"\n\n          + condition {\n              + test     = \"StringEquals\"\n              + values   = [\n                  + \"000000000000\",\n                ]\n              + variable = \"aws:SourceAccount\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"logging.s3.amazonaws.com\",\n                ]\n              + type        = \"Service\"\n            }\n        }\n    }\n\n  # data.aws_iam_policy_document.app will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:AbortMultipartUpload\",\n              + \"s3:DeleteObject\",\n              + \"s3:GetObject\",\n              + \"s3:GetObjectVersion\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"FileObjectAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:GetBucketLocation\",\n              + \"s3:ListBucket\",\n              + \"s3:ListBucketMultipartUploads\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"FileBucketListing\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:BatchGetItem\",\n              + \"dynamodb:BatchWriteItem\",\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"MetadataTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogging\"\n        }\n    }\n\n  # data.aws_iam_policy_document.files_bucket will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"files_bucket\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:*\",\n            ]\n          + effect    = \"Deny\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"DenyInsecureTransport\"\n\n          + condition {\n              + test     = \"Bool\"\n              + values   = [\n                  + \"false\",\n                ]\n              + variable = \"aws:SecureTransport\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"*\",\n                ]\n              + type        = \"AWS\"\n            }\n        }\n    }\n\n  # aws_cloudwatch_log_group.app will be created\n  + resource \"aws_cloudwatch_log_group\" \"app\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/file-share/app-logs\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\" = \"/file-share/app-logs\"\n        }\n      + tags_all          = {\n          + \"Environment\" = \"dev\"\n          + \"ManagedBy\"   = \"terraform\"\n          + \"Name\"        = \"/file-share/app-logs\"\n          + \"Project\"     = \"file_share_backend\"\n        }\n    }\n\n  # aws_dynamodb_table.metadata will be created\n  + resource \"aws_dynamodb_table\" \"metadata\" {\n      + arn                ",
+      "duration_s": 62.41
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 105,
+      "output_tokens": 1988,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2484,
+      "output_tokens": 33848,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2483,
+      "output_tokens": 10613,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.2071,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 25.7
+    },
+    {
+      "node": "generate_app",
+      "seconds": 306.4
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 100.4
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.4
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 18.0
+    },
+    {
+      "node": "deploy",
+      "seconds": 62.4
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 file_share_backend (fastapi); AWS resources: S3:file-share-files, DynamoDB:file-share-metadata, IAM:file-share-app-role, CloudWatch:/file-share/app-logs",
+    "\ud83d\udc0d Generated application code (initial): 5 files \u2014 FastAPI file-sharing backend with a decoupled storage layer.\n\n- `app.py`: FastAPI app exposing `/health`, `POST /files/upload-url`, `POST /files/{id}/confirm`, `GET /files`, `GET /files/{id}`, `GET /files/{id}/download-url`, `DELETE /files/{id}` and `GET /usage`. Pydantic models cover every request/response shape from the plan; repository and object-store are injected via `Depends`, so tests can swap in fakes. Filename/owner path-separator validation, opaque base64 pagination tokens, 404/409 semantics, and structured logging are included.\n- `storage.py`: AWS access layer. `s3_client()` / `dynamodb_resource()` read `AWS_ENDPOINT_URL` (LocalStack) and default region `us-east-1`; bucket (`file-share-files`), table (`file-share-metadata`), GSI (`owner-index`) and presign expiry (900s) all come from env vars. Provides `S3ObjectStore` (presigned PUT/GET, HeadObject, delete, head_bucket health) and `DynamoFileRepository` (put/get/update/delete, GSI query with pagination, paged scan, Decimal decoding) behind small `ObjectStore` / `FileRepository` interfaces, plus in-memory implementations for local dev and tests. Only boto3's own `boto3.dynamodb.conditions.Key` is used; AWS error codes are read off the exception response so no botocore import is needed.\n- `tests/test_app.py`: fully offline pytest suite using `fastapi.testclient.TestClient` with in-memory repository/object-store overrides, exercising every endpoint (happy paths, 400/404/409/422 cases, pagination, usage aggregation), plus stub-boto3-client tests for `S3ObjectStore` and `DynamoFileRepository`, token/Decimal helpers and env-driven client configuration.\n- `requirements.txt` lists only fastapi, uvicorn, boto3, pydantic; `README.md` documents endpoints, env vars, run and test commands. No hardcoded secrets, no debug literals, dev server binds 127.0.0.1 by default.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the file_share_backend plan, split across versions.tf, variables.tf, main.tf and outputs.tf, covering exactly the four planned AWS resources (S3 files bucket, DynamoDB metadata table with owner-index GSI, IAM app role/policy, CloudWatch log group) plus a companion S3 access-log bucket required to satisfy S3 logging checks.\n\nKey points:\n- versions.tf pins hashicorp/aws ~> 5.0 and sets provider default_tags (Project, ManagedBy=terraform, Environment).\n- S3 files bucket: SSE-S3 encryption with bucket keys, versioning, full public access block, BucketOwnerEnforced ownership, server access logging to a dedicated log bucket, lifecycle rules (abort incomplete multipart uploads, expire non-current versions), CORS for browser presigned PUT/GET, and a bucket policy denying non-TLS access. The log bucket mirrors the same hardening and self-logs.\n- DynamoDB: PAY_PER_REQUEST, hash key file_id, attributes file_id/owner/upload_time, owner-index GSI (owner hash, upload_time range, ALL projection), SSE enabled and point-in-time recovery enabled.\n- IAM: role assumable only by ec2.amazonaws.com with a least-privilege managed policy \u2014 object-level S3 actions scoped to the bucket's object ARN, ListBucket scoped to the bucket, DynamoDB item/query/scan actions scoped to the table and its GSI, and log stream writes scoped to the log group. No wildcard actions or resources.\n- CloudWatch log group /file-share/app-logs with 365-day retention.\n- Only LocalStack Community services are used (S3, DynamoDB, IAM, CloudWatch); no Lambda/API Gateway since the plan states the backend runs standalone. Unsatisfiable checks (KMS CMK encryption, cross-region replication, S3 event notifications) carry inline checkov:skip comments with reasons.\n- Variable defaults match the plan's resource names: file-share-files, file-share-metadata, owner-index, file-share-app-role, /file-share/app-logs. Outputs expose the bucket name, table name, GSI name, role ARN and log group for the application's environment configuration.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "requirements.txt",
+    "README.md",
+    "tests/test_app.py"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

@@ -1,0 +1,411 @@
+{
+  "run_id": "20260831-234501-62fc8e",
+  "timestamp": "2026-09-01T06:54:33.511153+00:00",
+  "started_at": "2026-09-01T06:45:01.012806+00:00",
+  "finished_at": "2026-09-01T06:54:33.511153+00:00",
+  "wall_seconds": 572.5,
+  "node_seconds_sum": 724.8,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build an image-gallery backend. Images are stored in S3 and organised into albums whose metadata lives in DynamoDB. Users can create albums, upload images to an album via presigned URLs, list images in an album, and delete images or whole albums.",
+  "benchmark_id": "M3-gallery",
+  "tier": "moderate",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "78b700be6b42a2fc1104cf10923b7ab15f588db97813be027bb9a167389968d8",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 5,
+      "domain_entities": 2,
+      "workflow_rules": 1,
+      "score": 10,
+      "rationale": "Couples albums and image metadata with object storage and a presigned upload flow."
+    },
+    "congruence_checklist": [
+      "S3 bucket for images",
+      "DynamoDB table for album metadata",
+      "POST endpoint creating an album",
+      "Presigned upload flow for images",
+      "GET endpoint listing images in an album",
+      "DELETE endpoints for images and albums"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "image_gallery_backend",
+    "summary": "A FastAPI service that manages photo albums and their images. Album and image metadata are persisted in DynamoDB, while the binary image data lives in an S3 bucket that clients read and write directly through presigned URLs issued by the API. The service exposes CRUD operations for albums, presigned-upload issuance plus upload confirmation for images, image listing with presigned download links, and cascading deletion of images or entire albums (removing both the S3 objects and the DynamoDB records). It is called by a web/mobile gallery frontend over JSON/HTTP and runs as a standalone service that talks to AWS directly with boto3.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe reporting service status and reachability of the configured S3 bucket and DynamoDB tables."
+      },
+      {
+        "method": "POST",
+        "path": "/albums",
+        "purpose": "Create a new album with a title and optional description; writes an Album item to the albums DynamoDB table and returns the generated album_id."
+      },
+      {
+        "method": "GET",
+        "path": "/albums",
+        "purpose": "List all albums (paginated via limit and next_token) by scanning the albums DynamoDB table."
+      },
+      {
+        "method": "GET",
+        "path": "/albums/{album_id}",
+        "purpose": "Fetch a single album's metadata, including its current image count."
+      },
+      {
+        "method": "PATCH",
+        "path": "/albums/{album_id}",
+        "purpose": "Update an album's title or description in DynamoDB."
+      },
+      {
+        "method": "DELETE",
+        "path": "/albums/{album_id}",
+        "purpose": "Delete an album: removes every S3 object belonging to the album, deletes all of the album's image items, then deletes the album item itself."
+      },
+      {
+        "method": "POST",
+        "path": "/albums/{album_id}/images",
+        "purpose": "Register a pending image in the album and return a presigned S3 PUT URL (plus fields and expiry) so the client can upload the bytes directly to S3."
+      },
+      {
+        "method": "POST",
+        "path": "/albums/{album_id}/images/{image_id}/complete",
+        "purpose": "Confirm an upload finished: verifies the object exists in S3 via head_object, records size/content type/etag, and flips the image status from pending to available."
+      },
+      {
+        "method": "GET",
+        "path": "/albums/{album_id}/images",
+        "purpose": "List image metadata for an album (DynamoDB query on the partition key), each entry including a presigned GET URL for viewing."
+      },
+      {
+        "method": "GET",
+        "path": "/albums/{album_id}/images/{image_id}",
+        "purpose": "Fetch a single image's metadata together with a freshly generated presigned download URL."
+      },
+      {
+        "method": "DELETE",
+        "path": "/albums/{album_id}/images/{image_id}",
+        "purpose": "Delete one image: removes the S3 object and the DynamoDB item, and decrements the album's image counter."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Album",
+        "fields": [
+          "album_id: str (uuid4, DynamoDB partition key)",
+          "title: str",
+          "description: str | None",
+          "image_count: int",
+          "created_at: str (ISO-8601 UTC)",
+          "updated_at: str (ISO-8601 UTC)"
+        ]
+      },
+      {
+        "name": "Image",
+        "fields": [
+          "album_id: str (DynamoDB partition key)",
+          "image_id: str (uuid4, DynamoDB sort key)",
+          "filename: str",
+          "content_type: str",
+          "s3_key: str (albums/{album_id}/{image_id}/{filename})",
+          "size_bytes: int | None",
+          "etag: str | None",
+          "status: str (pending|available)",
+          "created_at: str (ISO-8601 UTC)",
+          "uploaded_at: str | None"
+        ]
+      },
+      {
+        "name": "AlbumCreateRequest",
+        "fields": [
+          "title: str",
+          "description: str | None"
+        ]
+      },
+      {
+        "name": "AlbumUpdateRequest",
+        "fields": [
+          "title: str | None",
+          "description: str | None"
+        ]
+      },
+      {
+        "name": "PresignedUploadRequest",
+        "fields": [
+          "filename: str",
+          "content_type: str",
+          "size_bytes: int | None"
+        ]
+      },
+      {
+        "name": "PresignedUploadResponse",
+        "fields": [
+          "image_id: str",
+          "upload_url: str",
+          "method: str",
+          "s3_key: str",
+          "expires_in: int"
+        ]
+      },
+      {
+        "name": "ImageListResponse",
+        "fields": [
+          "album_id: str",
+          "items: list[ImageWithUrl]",
+          "count: int",
+          "next_token: str | None"
+        ]
+      },
+      {
+        "name": "ImageWithUrl",
+        "fields": [
+          "image_id: str",
+          "filename: str",
+          "content_type: str",
+          "size_bytes: int | None",
+          "status: str",
+          "download_url: str",
+          "created_at: str"
+        ]
+      },
+      {
+        "name": "ErrorResponse",
+        "fields": [
+          "error: str",
+          "detail: str | None"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "S3",
+        "name": "image-gallery-media",
+        "justification": "Stores the actual image bytes. The backend generates presigned PUT/GET URLs against this bucket, calls head_object to confirm uploads, and delete_object(s) when images or albums are removed. CORS is enabled so browsers can upload directly."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "image-gallery-albums",
+        "justification": "Album metadata store (partition key album_id). Backed by the create/list/get/update/delete album endpoints and the image_count counter maintained on upload and delete."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "image-gallery-images",
+        "justification": "Image metadata store with partition key album_id and sort key image_id, so listing images in an album is a single efficient Query and cascade deletion of an album is a Query plus BatchWriteItem."
+      },
+      {
+        "service": "IAM",
+        "name": "image-gallery-app-role",
+        "justification": "Execution role/policy granting the backend service exactly the permissions it uses: s3:PutObject/GetObject/DeleteObject/ListBucket/HeadObject on the media bucket, DynamoDB CRUD and Query on the two tables, and CloudWatch Logs writes. Also the principal whose credentials sign the presigned URLs."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/cloudforge/image-gallery",
+        "justification": "Log group the application writes structured request and S3/DynamoDB operation logs to, giving operators visibility into upload confirmations and delete cascades."
+      },
+      {
+        "service": "Secrets Manager",
+        "name": "image-gallery/app-config",
+        "justification": "Holds the runtime configuration the service reads at startup (bucket name, table names, presigned URL TTL) so credentials/config are not baked into the image; fetched once via get_secret_value."
+      }
+    ],
+    "assumptions": []
+  },
+  "max_iterations": 3,
+  "iterations_used": 1,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_iam_policy_document.app_assume_role: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.app_assume_role: Read complete after 0s [id=3651857230]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.app_dynamodb will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app_dynamodb\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:BatchGetItem\",\n              + \"dynamodb:BatchWriteItem\",\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"AlbumAndImageMetadataAccess\"\n        }\n    }\n\n  # data.aws_iam_policy_document.app_observability will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app_observability\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"WriteApplicationLogs\"\n        }\n      + statement {\n          + actions   = [\n              + \"secretsmanager:DescribeSecret\",\n              + \"secretsmanager:GetSecretValue\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ReadRuntimeConfiguration\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"kms:DescribeKey\",\n              + \"kms:Encrypt\",\n              + \"kms:GenerateDataKey\",\n              + \"kms:ReEncryptFrom\",\n              + \"kms:ReEncryptTo\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UseGalleryCmk\"\n        }\n    }\n\n  # data.aws_iam_policy_document.app_s3 will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app_s3\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:GetBucketLocation\",\n              + \"s3:ListBucket\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ListMediaBucketObjects\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:AbortMultipartUpload\",\n              + \"s3:DeleteObject\",\n              + \"s3:DeleteObjectVersion\",\n              + \"s3:GetObject\",\n              + \"s3:GetObjectVersion\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ManageAlbumImageObjects\"\n        }\n    }\n\n  # data.aws_iam_policy_document.logs_bucket will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"logs_bucket\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"AllowS3ServerAccessLogDelivery\"\n\n          + condition {\n              + test     = \"StringEquals\"\n              + values   = [\n                  + \"000000000000\",\n                ]\n              + variable = \"aws:SourceAccount\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"logging.s3.amazonaws.com\",\n                ]\n              + type        = \"Service\"\n            }\n        }\n      + statement {\n          + actions   = [\n              + \"s3:*\",\n            ]\n          + effect    = \"Deny\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"DenyInsecureTransport\"\n\n          + condition {\n              + test     = \"Bool\"\n              + values   = [\n                  + \"false\",\n                ]\n              + variable = \"aws:SecureTransport\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"*\",\n                ]\n              + type        = \"*\"\n            }\n        }\n    }\n\n  # data.aws_iam_policy_document.media_bucket will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"media_bucket\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:*\",\n            ]\n      "
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 4,
+      "failed": 1
+    },
+    {
+      "iteration": 1,
+      "passed": 3,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.25
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "...............                                                          [100%]\n15 passed in 0.21s",
+      "duration_s": 0.74
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.13
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 16.73
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 125 passed, 1 failed, 6 skipped.\nCKV_AWS_145 Ensure that S3 buckets are encrypted with KMS by default on aws_s3_bucket.logs (/main.tf)",
+      "duration_s": 2.55
+    },
+    {
+      "iteration": 1,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 16.77
+    },
+    {
+      "iteration": 1,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 126 passed, 0 failed, 6 skipped.",
+      "duration_s": 2.59
+    },
+    {
+      "iteration": 1,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_iam_policy_document.app_assume_role: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.app_assume_role: Read complete after 0s [id=3651857230]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.app_dynamodb will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app_dynamodb\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:BatchGetItem\",\n              + \"dynamodb:BatchWriteItem\",\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"AlbumAndImageMetadataAccess\"\n        }\n    }\n\n  # data.aws_iam_policy_document.app_observability will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app_observability\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"WriteApplicationLogs\"\n        }\n      + statement {\n          + actions   = [\n              + \"secretsmanager:DescribeSecret\",\n              + \"secretsmanager:GetSecretValue\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ReadRuntimeConfiguration\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"kms:DescribeKey\",\n              + \"kms:Encrypt\",\n              + \"kms:GenerateDataKey\",\n              + \"kms:ReEncryptFrom\",\n              + \"kms:ReEncryptTo\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UseGalleryCmk\"\n        }\n    }\n\n  # data.aws_iam_policy_document.app_s3 will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app_s3\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:GetBucketLocation\",\n              + \"s3:ListBucket\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ListMediaBucketObjects\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:AbortMultipartUpload\",\n              + \"s3:DeleteObject\",\n              + \"s3:DeleteObjectVersion\",\n              + \"s3:GetObject\",\n              + \"s3:GetObjectVersion\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ManageAlbumImageObjects\"\n        }\n    }\n\n  # data.aws_iam_policy_document.logs_bucket will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"logs_bucket\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"AllowS3ServerAccessLogDelivery\"\n\n          + condition {\n              + test     = \"StringEquals\"\n              + values   = [\n                  + \"000000000000\",\n                ]\n              + variable = \"aws:SourceAccount\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"logging.s3.amazonaws.com\",\n                ]\n              + type        = \"Service\"\n            }\n        }\n      + statement {\n          + actions   = [\n              + \"s3:*\",\n            ]\n          + effect    = \"Deny\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"DenyInsecureTransport\"\n\n          + condition {\n              + test     = \"Bool\"\n              + values   = [\n                  + \"false\",\n                ]\n              + variable = \"aws:SecureTransport\"\n            }\n\n          + principals {\n              + identifiers = [\n                  + \"*\",\n                ]\n              + type        = \"*\"\n            }\n        }\n    }\n\n  # data.aws_iam_policy_document.media_bucket will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"media_bucket\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:*\",\n            ]\n      ",
+      "duration_s": 61.44
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 97,
+      "output_tokens": 2531,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2667,
+      "output_tokens": 39549,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2666,
+      "output_tokens": 15666,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 12476,
+      "output_tokens": 10302,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.8171,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 30.6
+    },
+    {
+      "node": "generate_app",
+      "seconds": 359.4
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 151.2
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.1
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 19.3
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 82.3
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 19.4
+    },
+    {
+      "node": "deploy",
+      "seconds": 61.5
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 image_gallery_backend (fastapi); AWS resources: S3:image-gallery-media, DynamoDB:image-gallery-albums, DynamoDB:image-gallery-images, IAM:image-gallery-app-role, CloudWatch:/cloudforge/image-gallery, Secrets Manager:image-gallery/app-config",
+    "\ud83d\udc0d Generated application code (initial): 5 files \u2014 FastAPI image-gallery backend split into a thin HTTP layer (`app.py`, pydantic models, dependency-injected repository, custom exception handlers mapping domain errors to 400/404/409/502) and an AWS data-access layer (`storage.py`) that wraps S3 presigned PUT/GET issuance, head_object upload confirmation, DynamoDB album/image CRUD with cursor pagination, image_count maintenance, and cascading album deletion (S3 delete_objects + BatchWriteItem). All boto3 clients read `AWS_ENDPOINT_URL` and default to us-east-1; bucket/table names and presign TTL come from env vars (optionally overridden by a Secrets Manager JSON blob). Tests (`tests/test_app.py`) exercise every endpoint with FastAPI's TestClient against an injected in-memory repository, plus storage-layer tests using hand-written S3/DynamoDB stubs \u2014 no network, no hardcoded secrets, no debug flags.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the image-gallery backend, one-to-one with the plan's aws_resources list.\n\nFiles:\n- versions.tf: terraform block pinning hashicorp/aws ~> 5.0 (plus archive/local providers declared for completeness) and the AWS provider with default_tags (project, managed-by).\n- variables.tf: defaults matching plan names (image-gallery-media, image-gallery-albums, image-gallery-images, image-gallery-app-role, /cloudforge/image-gallery, image-gallery/app-config) plus TTL, CORS origins, retention knobs.\n- main.tf: resources.\n- outputs.tf: bucket/table/role/log-group/secret/KMS identifiers the app needs.\n\nResources generated (LocalStack-safe services only \u2014 S3, DynamoDB, IAM, CloudWatch Logs, Secrets Manager, KMS; no Lambda/API GW since the plan runs FastAPI standalone):\n- image-gallery-media S3 bucket: versioning, SSE-KMS with bucket keys, full public access block, BucketOwnerEnforced ownership, server access logging to a dedicated log bucket, lifecycle rule (noncurrent expiry + abort incomplete multipart), CORS rule for browser presigned PUT/GET, and a bucket policy denying non-TLS access.\n- Access-log bucket with its own versioning, encryption, public access block, lifecycle expiry and a policy allowing logging.s3.amazonaws.com writes scoped by source account.\n- Two DynamoDB tables (albums: album_id; images: album_id + image_id) with PAY_PER_REQUEST, point-in-time recovery and SSE using the CMK.\n- CloudWatch log group /cloudforge/image-gallery with 365-day retention and KMS encryption; the CMK policy grants the regional logs service encrypt/decrypt scoped to that log-group ARN.\n- Secrets Manager secret image-gallery/app-config, KMS-encrypted, whose version carries bucket/table names, prefix, region and presigned URL TTL.\n- IAM role image-gallery-app-role with three least-privilege policies: S3 (ListBucket/GetBucketLocation on the bucket; Get/Put/Delete/Abort only under albums/*), DynamoDB (item CRUD, Query/Scan, BatchGet/BatchWrite, DescribeTable on exactly the two table ARNs), and observability (log stream/put events on the log group ARN, GetSecretValue/DescribeSecret on the one secret, KMS use on the one key). No wildcard actions or wildcard resources.\n\nCheckov posture: encryption, versioning, PAB, PITR, logging, lifecycle and rotation-enabled CMK are all configured; the only suppressions are inline, justified skips for S3 cross-region replication, event notifications, self-logging of the log bucket, and secret auto-rotation (would require a rotation Lambda not in the plan).",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\u267b\ufe0f Validation failed for: iac \u2014 starting correction.",
+    "\ud83d\udd27 Correction iteration 1/3: feeding error logs back with the original specification.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (correction 1): 4 files \u2014 Fixed the single Checkov failure (CKV_AWS_145) by switching the access-log bucket's default server-side encryption from AES256 to SSE-KMS using the existing customer-managed key (with bucket keys still enabled). To keep S3 server access log delivery functional with a CMK, I added one statement to the KMS key policy allowing logging.s3.amazonaws.com to call kms:GenerateDataKey/kms:Decrypt, scoped by aws:SourceAccount. No resources were added or removed; all other files are unchanged and returned in full.",
+    "\ud83d\udd0e IaC validation (iteration 1): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

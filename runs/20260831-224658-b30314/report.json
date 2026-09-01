@@ -1,0 +1,409 @@
+{
+  "run_id": "20260831-224658-b30314",
+  "timestamp": "2026-09-01T05:56:12.762362+00:00",
+  "started_at": "2026-09-01T05:46:58.318858+00:00",
+  "finished_at": "2026-09-01T05:56:12.762362+00:00",
+  "wall_seconds": 554.4,
+  "node_seconds_sum": 746.6,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build a file-sharing backend. Clients can upload files to S3 via presigned URLs, list their files, and delete them. File metadata (owner, filename, size, upload time) is tracked in DynamoDB. Include an endpoint that returns storage usage per owner.",
+  "benchmark_id": "M1-fileshare",
+  "tier": "moderate",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "7db867181e5f4c77aef96e5dc8d5d24ac080a32a952c4aba2539075a9a82d285",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 4,
+      "domain_entities": 1,
+      "workflow_rules": 2,
+      "score": 9,
+      "rationale": "Object storage and metadata store coupled through presigned transfer and usage aggregation."
+    },
+    "congruence_checklist": [
+      "S3 bucket for file storage",
+      "DynamoDB table for file metadata",
+      "Endpoint issuing presigned upload URLs",
+      "GET endpoint listing a client's files",
+      "DELETE endpoint removing a file",
+      "Endpoint aggregating storage usage per owner"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "file_sharing_backend",
+    "summary": "A FastAPI service that brokers file sharing through S3 and DynamoDB. Clients request a presigned PUT URL to upload a file directly to S3, then confirm the upload so metadata (owner, filename, size, upload timestamp, S3 key) is recorded in DynamoDB. Clients can list their files, obtain presigned download URLs, delete files (removing both the S3 object and the metadata record), and query aggregate storage usage per owner. The service runs as a standalone process and calls S3 and DynamoDB directly with the AWS SDK.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness check reporting that the service and its S3/DynamoDB clients are configured."
+      },
+      {
+        "method": "POST",
+        "path": "/files/upload-url",
+        "purpose": "Generate a presigned S3 PUT URL for a new file; accepts owner, filename, content_type and optional size, returns file_id, upload_url, s3_key and expiry."
+      },
+      {
+        "method": "POST",
+        "path": "/files/{file_id}/complete",
+        "purpose": "Confirm an upload finished; reads the object size from S3 (HeadObject) and writes/updates the metadata record in DynamoDB."
+      },
+      {
+        "method": "GET",
+        "path": "/files",
+        "purpose": "List file metadata for an owner (owner query parameter required) with optional pagination via limit and next_token."
+      },
+      {
+        "method": "GET",
+        "path": "/files/{file_id}",
+        "purpose": "Fetch metadata for a single file, including a presigned GET download URL."
+      },
+      {
+        "method": "DELETE",
+        "path": "/files/{file_id}",
+        "purpose": "Delete the S3 object and its DynamoDB metadata record."
+      },
+      {
+        "method": "GET",
+        "path": "/usage",
+        "purpose": "Return storage usage (file count and total bytes) for a specific owner when owner is supplied, or for all owners when omitted."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "FileMetadata",
+        "fields": [
+          "file_id: str (partition key)",
+          "owner: str (GSI partition key)",
+          "filename: str",
+          "content_type: str",
+          "size_bytes: int",
+          "s3_key: str",
+          "status: str (pending|available)",
+          "uploaded_at: str (ISO-8601 UTC)"
+        ]
+      },
+      {
+        "name": "UploadUrlRequest",
+        "fields": [
+          "owner: str",
+          "filename: str",
+          "content_type: str = application/octet-stream",
+          "size_bytes: int | None"
+        ]
+      },
+      {
+        "name": "UploadUrlResponse",
+        "fields": [
+          "file_id: str",
+          "upload_url: str",
+          "s3_key: str",
+          "expires_in: int"
+        ]
+      },
+      {
+        "name": "FileListResponse",
+        "fields": [
+          "owner: str",
+          "files: list[FileMetadata]",
+          "count: int",
+          "next_token: str | None"
+        ]
+      },
+      {
+        "name": "OwnerUsage",
+        "fields": [
+          "owner: str",
+          "file_count: int",
+          "total_bytes: int"
+        ]
+      },
+      {
+        "name": "UsageResponse",
+        "fields": [
+          "owners: list[OwnerUsage]",
+          "total_bytes: int"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "S3",
+        "name": "file-sharing-objects",
+        "justification": "Stores the uploaded file objects; the app generates presigned PUT/GET URLs against this bucket and issues HeadObject/DeleteObject calls."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "file-metadata",
+        "justification": "Primary store for file metadata (file_id partition key) queried by the list, get, delete and usage endpoints; includes an owner-index GSI (owner hash, uploaded_at range) so per-owner listing and usage aggregation avoid full scans."
+      },
+      {
+        "service": "IAM",
+        "name": "file-sharing-app-role",
+        "justification": "Role/policy granting the backend service the least-privilege S3 (GetObject, PutObject, DeleteObject, HeadObject, ListBucket) and DynamoDB (PutItem, GetItem, UpdateItem, DeleteItem, Query, Scan) permissions it actually uses."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/cloudforge/file-sharing-backend",
+        "justification": "Log group the application writes operational logs to for upload/delete activity and errors."
+      }
+    ],
+    "assumptions": [
+      "Owner identity is supplied by the client as an 'owner' string (request body or query parameter); no authentication/JWT layer is specified, so none is implemented.",
+      "Presigned URLs expire after 900 seconds by default, configurable via environment variable.",
+      "S3 object keys follow the pattern {owner}/{file_id}/{filename} to keep per-owner objects grouped and avoid collisions.",
+      "Uploads are recorded as status 'pending' when the presigned URL is issued and flipped to 'available' with the authoritative size from S3 HeadObject on the complete call; the size in the metadata record is therefore taken from S3 rather than trusting the client.",
+      "Storage usage is computed on demand by querying the owner-index GSI (or scanning for the all-owners view) and summing size_bytes; no separate counter table or aggregation pipeline is required at this scale.",
+      "No asynchronous or event-driven processing (virus scanning, thumbnails, notifications) is specified, so no Lambda, SQS or SNS resources are planned; API Gateway is omitted because the backend runs as its own service, not in Lambda.",
+      "No secrets beyond AWS credentials supplied by the environment are needed, so Secrets Manager is not planned.",
+      "Deletion is a hard delete of both the S3 object and the DynamoDB item; no versioning or soft-delete retention was requested.",
+      "AWS endpoint URL, region, bucket name and table name are read from environment variables so the service can point at LocalStack."
+    ]
+  },
+  "max_iterations": 3,
+  "iterations_used": 1,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_iam_policy_document.assume_role: Reading...\ndata.aws_iam_policy_document.assume_role: Read complete after 0s [id=3592829240]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.app will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:GetBucketLocation\",\n              + \"s3:ListBucket\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ListUploadBucket\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:DeleteObject\",\n              + \"s3:GetObject\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ReadWriteUploadObjects\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"FileMetadataTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"WriteApplicationLogs\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.app will be created\n  + resource \"aws_cloudwatch_log_group\" \"app\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/cloudforge/file-sharing-backend\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"        = \"/cloudforge/file-sharing-backend\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backend\"\n          + \"purpose\"     = \"application-logs\"\n        }\n      + tags_all          = {\n          + \"Name\"        = \"/cloudforge/file-sharing-backend\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backend\"\n          + \"purpose\"     = \"application-logs\"\n        }\n    }\n\n  # aws_dynamodb_table.file_metadata will be created\n  + resource \"aws_dynamodb_table\" \"file_metadata\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"file_id\"\n      + id               = (known after apply)\n      + name             = \"file-metadata\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\"        = \"file-metadata\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backend\"\n          + \"purpose\"     = \"file-metadata-store\"\n        }\n      + tags_all         = {\n          + \"Name\"        = \"file-metadata\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backend\"\n          + \"purpose\"     = \"file-metadata-store\"\n        }\n      + write_capacity   = (known after apply)\n\n      + attribute {\n          + name = \"file_id\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"owner\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"uploaded_at\"\n          + type = \"S\"\n        }\n\n      + global_secondary_index {\n          + hash_key           = \"owner\"\n          + name               = \"owner-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"uploaded_at\"\n          + read_capacity      = (known after apply)\n          + write_capacity     = (known after apply)\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl (known after apply)\n    }\n\n  # aws_iam_policy.app will be created\n  + resource \"aws_iam_policy\" \"app\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least-privilege permissions for the file sharing backend (S3 objects, file metadata table, application log group).\"\n      + id               = (known after apply)\n      + name             = \"file-sharing-app-role-policy\"\n      + name_prefix      = (known after apply)\n      + path             = \"/\"\n      + policy           = (known after apply)\n      + policy_id        = (known after apply)\n      + tags             = {\n          + \"Name\"        = \"file-sharing-app-role-policy\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backe"
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 3,
+      "failed": 2
+    },
+    {
+      "iteration": 1,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": false,
+      "output": "./tests/test_app.py:5:1: F401 'typing.Tuple' imported but unused",
+      "duration_s": 0.33
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "..............................                                           [100%]\n30 passed in 0.28s",
+      "duration_s": 0.96
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.13
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 16.06
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 65 passed, 8 failed, 0 skipped.\nCKV_AWS_119 Ensure DynamoDB Tables are encrypted using a KMS Customer Managed CMK on aws_dynamodb_table.file_metadata (/main.tf)\nCKV_AWS_158 Ensure that CloudWatch Log Group is encrypted by KMS on aws_cloudwatch_log_group.app (/main.tf)\nCKV2_AWS_62 Ensure S3 buckets should have event notifications enabled on aws_s3_bucket.access_logs (/main.tf)\nCKV2_AWS_62 Ensure S3 buckets should have event notifications enabled on aws_s3_bucket.objects (/main.tf)\nCKV_AWS_144 Ensure that S3 bucket has cross-region replication enabled on aws_s3_bucket.access_logs (/main.tf)\nCKV_AWS_144 Ensure that S3 bucket has cross-region replication enabled on aws_s3_bucket.objects (/main.tf)\nCKV_AWS_145 Ensure that S3 buckets are encrypted with KMS by default on aws_s3_bucket.access_logs (/main.tf)\nCKV_AWS_145 Ensure that S3 buckets are encrypted with KMS by default on aws_s3_bucket.objects (/main.tf)",
+      "duration_s": 2.56
+    },
+    {
+      "iteration": 1,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.27
+    },
+    {
+      "iteration": 1,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "..............................                                           [100%]\n30 passed in 0.27s",
+      "duration_s": 0.86
+    },
+    {
+      "iteration": 1,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.12
+    },
+    {
+      "iteration": 1,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 13.97
+    },
+    {
+      "iteration": 1,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 63 passed, 0 failed, 10 skipped.",
+      "duration_s": 2.73
+    },
+    {
+      "iteration": 1,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_iam_policy_document.assume_role: Reading...\ndata.aws_iam_policy_document.assume_role: Read complete after 0s [id=3592829240]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.app will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"app\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:GetBucketLocation\",\n              + \"s3:ListBucket\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ListUploadBucket\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:DeleteObject\",\n              + \"s3:GetObject\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ReadWriteUploadObjects\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"FileMetadataTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"WriteApplicationLogs\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.app will be created\n  + resource \"aws_cloudwatch_log_group\" \"app\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/cloudforge/file-sharing-backend\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"        = \"/cloudforge/file-sharing-backend\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backend\"\n          + \"purpose\"     = \"application-logs\"\n        }\n      + tags_all          = {\n          + \"Name\"        = \"/cloudforge/file-sharing-backend\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backend\"\n          + \"purpose\"     = \"application-logs\"\n        }\n    }\n\n  # aws_dynamodb_table.file_metadata will be created\n  + resource \"aws_dynamodb_table\" \"file_metadata\" {\n      + arn              = (known after apply)\n      + billing_mode     = \"PAY_PER_REQUEST\"\n      + hash_key         = \"file_id\"\n      + id               = (known after apply)\n      + name             = \"file-metadata\"\n      + read_capacity    = (known after apply)\n      + stream_arn       = (known after apply)\n      + stream_label     = (known after apply)\n      + stream_view_type = (known after apply)\n      + tags             = {\n          + \"Name\"        = \"file-metadata\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backend\"\n          + \"purpose\"     = \"file-metadata-store\"\n        }\n      + tags_all         = {\n          + \"Name\"        = \"file-metadata\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backend\"\n          + \"purpose\"     = \"file-metadata-store\"\n        }\n      + write_capacity   = (known after apply)\n\n      + attribute {\n          + name = \"file_id\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"owner\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"uploaded_at\"\n          + type = \"S\"\n        }\n\n      + global_secondary_index {\n          + hash_key           = \"owner\"\n          + name               = \"owner-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"uploaded_at\"\n          + read_capacity      = (known after apply)\n          + write_capacity     = (known after apply)\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl (known after apply)\n    }\n\n  # aws_iam_policy.app will be created\n  + resource \"aws_iam_policy\" \"app\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least-privilege permissions for the file sharing backend (S3 objects, file metadata table, application log group).\"\n      + id               = (known after apply)\n      + name             = \"file-sharing-app-role-policy\"\n      + name_prefix      = (known after apply)\n      + path             = \"/\"\n      + policy           = (known after apply)\n      + policy_id        = (known after apply)\n      + tags             = {\n          + \"Name\"        = \"file-sharing-app-role-policy\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"file_sharing_backe",
+      "duration_s": 61.32
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "category": "syntax_violation"
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 105,
+      "output_tokens": 1834,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2294,
+      "output_tokens": 31490,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2293,
+      "output_tokens": 11799,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 21924,
+      "output_tokens": 19553,
+      "cache_read_input_tokens": 1048,
+      "cache_creation_input_tokens": 0
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 9929,
+      "output_tokens": 8562,
+      "cache_read_input_tokens": 937,
+      "cache_creation_input_tokens": 0
+    }
+  ],
+  "estimated_cost_usd": 2.0352,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 22.7
+    },
+    {
+      "node": "generate_app",
+      "seconds": 283.5
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 116.7
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.4
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 18.6
+    },
+    {
+      "node": "generate_app",
+      "seconds": 151.6
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 72.9
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.2
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 16.7
+    },
+    {
+      "node": "deploy",
+      "seconds": 61.3
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 file_sharing_backend (fastapi); AWS resources: S3:file-sharing-objects, DynamoDB:file-metadata, IAM:file-sharing-app-role, CloudWatch:/cloudforge/file-sharing-backend",
+    "\ud83d\udc0d Generated application code (initial): 6 files \u2014 FastAPI file-sharing backend split into `app.py` (routes, pydantic models, exception mapping) and `storage.py` (a `FileStore` interface with a `DynamoS3FileStore` boto3 implementation for S3 presigned PUT/GET, HeadObject sizing, DynamoDB metadata CRUD, owner-index paginated listing with base64 tokens, and usage aggregation). All AWS clients honour `AWS_ENDPOINT_URL` and default to `us-east-1`; bucket/table/index/expiry come from env vars matching the plan defaults. Tests use `fastapi.testclient.TestClient` with a dependency-injected in-memory store for every endpoint plus fake S3/DynamoDB doubles for the storage layer, so nothing touches the network. No hardcoded secrets, no debug flags, binds to 127.0.0.1 by default; requirements.txt lists only fastapi, uvicorn, boto3, pydantic (dev extras in requirements-dev.txt).",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the file_sharing_backend plan, scoped strictly to the four planned AWS resources (S3 objects bucket, DynamoDB file-metadata table with owner-index GSI, IAM app role/policy, CloudWatch log group) plus a dedicated S3 access-log bucket required by Checkov's logging check.\n\n- versions.tf: terraform block, required_version >= 1.5.0, hashicorp/aws pinned ~> 5.0.\n- variables.tf: defaults match the plan's names (file-sharing-objects, file-metadata, owner-index, file-sharing-app-role, /cloudforge/file-sharing-backend), plus region, retention and LocalStack path-style toggle.\n- main.tf: provider with default_tags (project, managed-by). Both S3 buckets get versioning, SSE (AES256 + bucket keys), full public access block, BucketOwnerEnforced ownership, lifecycle rules (abort incomplete multipart, noncurrent expiration, log expiry) and TLS-only bucket policies; the objects bucket ships server access logs to the log bucket and has a CORS rule so browser presigned PUT/GET works. DynamoDB uses PAY_PER_REQUEST with file_id hash key, owner/uploaded_at GSI, point-in-time recovery and SSE. CloudWatch log group has explicit retention. IAM role is assumable only by named service principals and its policy is least privilege: ListBucket/GetBucketLocation on the bucket ARN, Get/Put/DeleteObject on objects only, the six item/query operations plus DescribeTable on the table and its index ARN, and log writes on the specific log group \u2014 no wildcard actions or resources.\n- Only LocalStack Community services are used (S3, DynamoDB, IAM, CloudWatch Logs); no Lambda/RDS/ECS/KMS. Checks that cannot be satisfied without KMS or cross-region replication on LocalStack carry explicit, reasoned checkov:skip comments.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u274c, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\u267b\ufe0f Validation failed for: app, iac \u2014 starting correction.",
+    "\ud83d\udd27 Correction iteration 1/3: feeding error logs back with the original specification.",
+    "\ud83d\udc0d Generated application code (correction 1): 6 files \u2014 Removed the unused `Tuple` import from `tests/test_app.py` (flake8 F401). No other changes: all endpoints, storage layer, tests, requirements and README are unchanged and returned in full.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (correction 1): 4 files \u2014 The eight Checkov failures were all caused by suppression comments placed above the resource blocks instead of inside them, so Checkov never registered them (report showed \"0 skipped\"). The fix moves every `#checkov:skip=<ID>:<reason>` comment to the first lines inside the corresponding resource body: CKV_AWS_144/CKV_AWS_145/CKV2_AWS_62 (plus CKV_AWS_18 and CKV2_AWS_61 for the log bucket) inside `aws_s3_bucket.objects` and `aws_s3_bucket.access_logs`, CKV_AWS_119 inside `aws_dynamodb_table.file_metadata`, and CKV_AWS_158 inside `aws_cloudwatch_log_group.app`. The justifications reflect LocalStack Community limits (no KMS CMKs, no cross-region replication) and the plan's explicit exclusion of event-driven processing (no Lambda/SQS/SNS consumers). No resources were added or removed \u2014 S3 objects bucket + its access-log bucket, the DynamoDB file-metadata table with owner-index GSI, the least-privilege IAM role/policy, and the CloudWatch log group all still map one-to-one to the plan's aws_resources, and all real security controls (SSE, versioning, public access block, logging, lifecycle, PITR, TLS-only bucket policies, scoped IAM actions) remain in place.",
+    "\ud83d\udd0e App validation (iteration 1): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 1): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

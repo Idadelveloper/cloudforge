@@ -1,0 +1,293 @@
+{
+  "run_id": "20260831-235736-2173d9",
+  "timestamp": "2026-09-01T07:04:16.394263+00:00",
+  "started_at": "2026-09-01T06:57:36.590587+00:00",
+  "finished_at": "2026-09-01T07:04:16.394263+00:00",
+  "wall_seconds": 399.8,
+  "node_seconds_sum": 526.0,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "failed",
+  "spec": "Build an event-registration service. Organisers create events with a title, date and capacity; attendees register for an event until it is full, after which registrations are rejected. Every successful registration is also published to an SQS queue for downstream processing. Events and registrations are stored in DynamoDB.",
+  "benchmark_id": "M4-registration",
+  "tier": "moderate",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "23ecd4f37b886629cc49ee8c93e58962efab80f573aa66a1fa2f7b905f8391da",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 3,
+      "domain_entities": 2,
+      "workflow_rules": 2,
+      "score": 9,
+      "rationale": "Adds a capacity invariant and asynchronous registration event to two related entities."
+    },
+    "congruence_checklist": [
+      "DynamoDB storage for events and registrations",
+      "SQS queue receiving registration events",
+      "POST endpoint creating an event",
+      "POST endpoint registering an attendee",
+      "Capacity limit enforced with rejection when full",
+      "GET endpoint listing an event's registrations"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "event_registration_service",
+    "summary": "A FastAPI service for event registration. Organisers create and list events (title, date, capacity); attendees register for an event while seats remain, and registrations are rejected once capacity is reached. Events and registrations are persisted in DynamoDB, and each successful registration is published to an SQS queue for downstream processing (e.g. confirmation emails, analytics).",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/events",
+        "purpose": "Create a new event with title, date and capacity; returns the generated event id."
+      },
+      {
+        "method": "GET",
+        "path": "/events",
+        "purpose": "List all events with their capacity and current registration count."
+      },
+      {
+        "method": "GET",
+        "path": "/events/{event_id}",
+        "purpose": "Retrieve a single event including remaining capacity; 404 if not found."
+      },
+      {
+        "method": "POST",
+        "path": "/events/{event_id}/registrations",
+        "purpose": "Register an attendee (name, email) for the event; stores the registration in DynamoDB and publishes a message to SQS. Returns 409 if the event is full, 404 if the event does not exist, 409 if the attendee is already registered."
+      },
+      {
+        "method": "GET",
+        "path": "/events/{event_id}/registrations",
+        "purpose": "List registrations for a given event."
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness check reporting service and dependency status."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Event",
+        "fields": [
+          "event_id: string (partition key, UUID)",
+          "title: string",
+          "date: string (ISO-8601 date)",
+          "capacity: integer (>0)",
+          "registered_count: integer (default 0, incremented atomically)",
+          "created_at: string (ISO-8601 timestamp)"
+        ]
+      },
+      {
+        "name": "Registration",
+        "fields": [
+          "event_id: string (partition key)",
+          "registration_id: string (sort key, UUID)",
+          "attendee_name: string",
+          "attendee_email: string",
+          "status: string (confirmed)",
+          "created_at: string (ISO-8601 timestamp)"
+        ]
+      },
+      {
+        "name": "RegistrationMessage",
+        "fields": [
+          "registration_id: string",
+          "event_id: string",
+          "event_title: string",
+          "attendee_name: string",
+          "attendee_email: string",
+          "registered_at: string (ISO-8601 timestamp)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "events",
+        "justification": "Stores event records (title, date, capacity, registered_count). Atomic conditional UpdateItem on registered_count enforces the capacity limit; read by the event list/detail endpoints."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "registrations",
+        "justification": "Stores each attendee registration keyed by event_id (partition) and registration_id (sort) so registrations for an event can be queried directly; also backs duplicate-email checks via a GSI."
+      },
+      {
+        "service": "SQS",
+        "name": "registration-events",
+        "justification": "The spec requires every successful registration to be published to a queue for downstream processing; the application calls SendMessage after a registration is committed."
+      },
+      {
+        "service": "SQS",
+        "name": "registration-events-dlq",
+        "justification": "Redrive target for registration-events so registration messages that repeatedly fail downstream processing are retained rather than lost."
+      },
+      {
+        "service": "IAM",
+        "name": "event-registration-service-role",
+        "justification": "Least-privilege policy granting the backend service GetItem/PutItem/UpdateItem/Query/Scan on the two DynamoDB tables and SendMessage on the registration queue."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/cloudforge/event-registration-service",
+        "justification": "Log group for application logs and a metric/alarm on queue depth and rejected-registration counts for operational visibility."
+      }
+    ],
+    "assumptions": [
+      "No authentication or authorisation is specified; all endpoints are open and an 'organiser' is simply any caller of POST /events.",
+      "Event ids and registration ids are server-generated UUID4 strings.",
+      "Event date is accepted and stored as an ISO-8601 date string; no timezone handling or past-date validation beyond format checking.",
+      "Capacity is enforced with a DynamoDB conditional atomic increment (registered_count < capacity) so concurrent registrations cannot oversell; a failed condition returns HTTP 409.",
+      "A full event returns 409 Conflict with an explanatory error body rather than 400.",
+      "An attendee email may only register once per event; duplicates return 409.",
+      "The SQS message is sent after the registration item is written; a send failure is logged and returns 202-style success detail rather than rolling back, since the registration itself succeeded.",
+      "No downstream consumer is part of this specification, so no Lambda or API Gateway is planned \u2014 the backend runs as its own service and calls DynamoDB and SQS directly.",
+      "No secrets are required; AWS credentials and endpoint URLs come from environment variables (AWS_ENDPOINT_URL for LocalStack), so Secrets Manager is not planned.",
+      "Standard (non-FIFO) SQS queue is sufficient as ordering is not required.",
+      "Pagination is not specified; list endpoints return up to a bounded page size (default 100) with an optional cursor."
+    ]
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": false,
+    "output": ""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 4,
+      "failed": 1
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.27
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": ".................................                                        [100%]\n33 passed in 0.24s",
+      "duration_s": 0.73
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.12
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 15.64
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 24 passed, 2 failed, 1 skipped.\nCKV_AWS_119 Ensure DynamoDB Tables are encrypted using a KMS Customer Managed CMK on aws_dynamodb_table.events (/main.tf)\nCKV_AWS_119 Ensure DynamoDB Tables are encrypted using a KMS Customer Managed CMK on aws_dynamodb_table.registrations (/main.tf)",
+      "duration_s": 2.91
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 106,
+      "output_tokens": 1646,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2072,
+      "output_tokens": 38875,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2071,
+      "output_tokens": 12422,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.3654,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 20.9
+    },
+    {
+      "node": "generate_app",
+      "seconds": 360.2
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 125.2
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.1
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 18.6
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 event_registration_service (fastapi); AWS resources: DynamoDB:events, DynamoDB:registrations, SQS:registration-events, SQS:registration-events-dlq, IAM:event-registration-service-role, CloudWatch:/cloudforge/event-registration-service",
+    "\ud83d\udc0d Generated application code (initial): 7 files \u2014 FastAPI event-registration service with a decoupled storage layer. `app.py` exposes POST/GET /events, GET /events/{id}, POST/GET /events/{id}/registrations and /health, wiring repository and publisher through FastAPI dependencies (overridable in tests). `storage.py` holds boto3 factories honouring AWS_ENDPOINT_URL and us-east-1, a DynamoDBRepository (conditional atomic increment `registered_count < capacity` for oversell-proof capacity, duplicate-email checks, opaque base64 cursors, Decimal normalisation, seat-release compensation), an InMemoryRepository, an SqsPublisher (send-after-commit, failure logged and reported via `queued: false`) and an InMemoryPublisher. `models.py` contains pydantic v2 request/response models with date and email validation. Tests cover every endpoint plus the DynamoDB/SQS layers using local fakes only \u2014 no network or LocalStack required.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the event-registration service, scoped exactly to the plan's aws_resources and LocalStack-supported services.\n\nFiles:\n- versions.tf: required_version, hashicorp/aws ~> 5.0 pin, provider with default_tags (project / managed-by / Project / ManagedBy / Environment).\n- variables.tf: defaults matching plan names (events, registrations, registration-events, registration-events-dlq, event-registration-service-role, /cloudforge/event-registration-service) plus tunables (retention 365 days, redrive maxReceiveCount, alarm thresholds).\n- main.tf:\n  * aws_dynamodb_table.events \u2014 PAY_PER_REQUEST, hash key event_id, SSE enabled, point-in-time recovery enabled.\n  * aws_dynamodb_table.registrations \u2014 event_id/registration_id keys, attendee_email_index GSI (attendee_email + event_id) for duplicate-email checks, SSE + PITR.\n  * aws_sqs_queue.registration_events with sqs_managed_sse_enabled and a redrive_policy targeting aws_sqs_queue.registration_events_dlq (also SSE-enabled), plus aws_sqs_queue_redrive_allow_policy restricting the DLQ source to the main queue.\n  * aws_cloudwatch_log_group with 365-day retention, a metric filter turning \"registration_rejected\" log lines into a RejectedRegistrations metric, and three alarms (queue backlog, DLQ messages, rejected registrations). CKV_AWS_158 is explicitly skipped with a documented reason because KMS is outside the approved service set for this stack.\n  * IAM role (ecs-tasks service principal, no wildcard principals) with a least-privilege customer policy: table-scoped DynamoDB item/query/scan actions (including the GSI ARN), SendMessage/GetQueueUrl/GetQueueAttributes on the registration queue only, and log-stream writes on the single log group \u2014 no \"*\" actions or resources.\n- outputs.tf: table names/ARNs, GSI name, queue URLs/ARNs, DLQ URL/ARN, role/policy ARNs and log group name for application wiring.\n\nNo Lambda, API Gateway, S3, SNS, Secrets Manager or KMS resources were created since the plan does not use them.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\ud83d\uded1 Validation still failing after 0 correction iteration(s); the 0-iteration bound is reached (Temporal Blind Spot safeguard)."
+  ],
+  "app_files": [
+    "app.py",
+    "models.py",
+    "storage.py",
+    "conftest.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

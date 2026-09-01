@@ -1,0 +1,279 @@
+{
+  "run_id": "20260831-230238-5307ca",
+  "timestamp": "2026-09-01T06:06:57.010823+00:00",
+  "started_at": "2026-09-01T06:02:38.722347+00:00",
+  "finished_at": "2026-09-01T06:06:57.010823+00:00",
+  "wall_seconds": 258.3,
+  "node_seconds_sum": 342.1,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "failed",
+  "spec": "Build a bookmark manager API protected by an API key. The API key is stored in AWS Secrets Manager, and every request must present it in a header. Users can save bookmarks with a URL, title and tags, list bookmarks filtered by tag, and delete bookmarks. Bookmarks are stored in DynamoDB.",
+  "benchmark_id": "M2-bookmarks",
+  "tier": "moderate",
+  "evaluation_condition": "baseline",
+  "benchmark": {
+    "fingerprint": "fd874f00fd7be14cc5c5d7918b3f8dd530492d269b5f79bb304a9c193fad93fc",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 3,
+      "domain_entities": 1,
+      "workflow_rules": 2,
+      "score": 8,
+      "rationale": "Adds secret-backed API-key enforcement and tag filtering to a bookmark store."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for bookmarks",
+      "Secrets Manager secret holding the API key",
+      "Request authentication via API-key header",
+      "POST endpoint saving a bookmark",
+      "GET endpoint filtering bookmarks by tag",
+      "DELETE endpoint removing a bookmark"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "bookmark_manager_api",
+    "summary": "A FastAPI service that manages personal bookmarks (URL, title, tags) persisted in DynamoDB. Every request must present a shared API key in the X-API-Key header; the expected key is fetched from AWS Secrets Manager at startup (cached, with refresh on mismatch). Clients can create bookmarks, list them with optional tag filtering, fetch a single bookmark, and delete bookmarks. No asynchronous or event-driven processing is implied, so no Lambda/SQS/SNS resources are planned.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Unauthenticated liveness probe used by the harness to confirm the service is up and can reach its dependencies."
+      },
+      {
+        "method": "POST",
+        "path": "/bookmarks",
+        "purpose": "Create a bookmark from a JSON body containing url, title and optional tags; stores the item in DynamoDB and returns the created record with its generated id."
+      },
+      {
+        "method": "GET",
+        "path": "/bookmarks",
+        "purpose": "List bookmarks, optionally filtered by an exact tag via the ?tag= query parameter; supports simple pagination via limit."
+      },
+      {
+        "method": "GET",
+        "path": "/bookmarks/{bookmark_id}",
+        "purpose": "Retrieve a single bookmark by id, returning 404 if it does not exist."
+      },
+      {
+        "method": "DELETE",
+        "path": "/bookmarks/{bookmark_id}",
+        "purpose": "Delete a bookmark by id, returning 404 if it does not exist and 204 on success."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Bookmark",
+        "fields": [
+          "bookmark_id: string (uuid4, DynamoDB partition key)",
+          "url: string (required, http/https validated)",
+          "title: string (required)",
+          "tags: list[string] (default empty list, lowercased and de-duplicated)",
+          "created_at: string (ISO-8601 UTC timestamp)",
+          "updated_at: string (ISO-8601 UTC timestamp)"
+        ]
+      },
+      {
+        "name": "BookmarkCreateRequest",
+        "fields": [
+          "url: string (required)",
+          "title: string (required)",
+          "tags: list[string] (optional, defaults to [])"
+        ]
+      },
+      {
+        "name": "BookmarkListResponse",
+        "fields": [
+          "items: list[Bookmark]",
+          "count: integer",
+          "tag: string | null (echo of the applied filter)"
+        ]
+      },
+      {
+        "name": "ErrorResponse",
+        "fields": [
+          "detail: string",
+          "status_code: integer"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "bookmarks",
+        "justification": "Primary store for bookmark records; partition key bookmark_id (S). The application writes on POST, reads on GET/list, and deletes on DELETE. Tag filtering is served by a GSI on the tag attribute where feasible, otherwise a filtered scan."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "bookmarks-tag-index (GSI on table 'bookmarks')",
+        "justification": "Global secondary index keyed on tag (S) + bookmark_id (S) so that GET /bookmarks?tag=... can query rather than scan; the app writes one index-friendly tag projection per bookmark."
+      },
+      {
+        "service": "Secrets Manager",
+        "name": "bookmark-manager/api-key",
+        "justification": "Holds the shared API key JSON ({\"api_key\": \"...\"}). The app calls GetSecretValue at startup and on cache expiry to validate the X-API-Key header on every request."
+      },
+      {
+        "service": "IAM",
+        "name": "bookmark-manager-app-role (+ policy bookmark-manager-app-policy)",
+        "justification": "Grants the running service dynamodb:PutItem/GetItem/DeleteItem/Query/Scan on the bookmarks table and its index, secretsmanager:GetSecretValue on the API key secret, and CloudWatch Logs write permissions."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/cloudforge/bookmark-manager-api",
+        "justification": "Log group for application request/error logs emitted by the service, giving operational visibility for auth failures and DynamoDB errors."
+      }
+    ],
+    "assumptions": [
+      "The API key header name is X-API-Key; a missing header returns 401 and a wrong key returns 403 (401 also acceptable), with /health left unauthenticated so the harness can probe readiness.",
+      "The secret is stored as JSON with an 'api_key' field, but the app also accepts a raw plaintext secret string for robustness.",
+      "This is a single-tenant/shared-key API: bookmarks are not partitioned per user, since the spec mentions no user accounts or per-user identity.",
+      "Tag filtering matches a single exact tag (case-insensitive, tags normalised to lowercase on write); multi-tag or substring search is out of scope.",
+      "bookmark_id is a server-generated uuid4 string; clients cannot supply their own id.",
+      "DynamoDB uses PAY_PER_REQUEST billing, which LocalStack accepts, and no update endpoint is provided because the spec only lists save, list and delete.",
+      "AWS endpoints are configured via environment variables (AWS_ENDPOINT_URL, AWS_REGION, table and secret names) so the service can target LocalStack.",
+      "No asynchronous processing, notifications, file uploads or scheduled jobs are required, so SQS, SNS, S3, Lambda and API Gateway are deliberately omitted."
+    ]
+  },
+  "max_iterations": 0,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": false,
+    "output": ""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 4,
+      "failed": 1
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.26
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "...................                                                      [100%]\n=============================== warnings summary ===============================\nruns/20260831-230238-5307ca/app/tests/test_app.py::test_create_rejects_invalid_url\n  /Users/idadelphine/Desktop/personal/school/cloudforge/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py:59: StarletteDeprecationWarning: 'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead.\n    response = await handler(conn, exc)  # type: ignore[arg-type]\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n19 passed, 1 warning in 0.19s",
+      "duration_s": 0.71
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.11
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 16.95
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": false,
+      "output": "Checkov: 35 passed, 1 failed, 3 skipped.\nCKV_AWS_119 Ensure DynamoDB Tables are encrypted using a KMS Customer Managed CMK on aws_dynamodb_table.bookmarks (/main.tf)",
+      "duration_s": 3.35
+    }
+  ],
+  "failure_taxonomy": [
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "category": "security_noncompliance"
+    }
+  ],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 122,
+      "output_tokens": 1762,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2167,
+      "output_tokens": 23119,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2166,
+      "output_tokens": 7991,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 0.8646,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 23.9
+    },
+    {
+      "node": "generate_app",
+      "seconds": 214.0
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 82.8
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.1
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 20.3
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 bookmark_manager_api (fastapi); AWS resources: DynamoDB:bookmarks, DynamoDB:bookmarks-tag-index (GSI on table 'bookmarks'), Secrets Manager:bookmark-manager/api-key, IAM:bookmark-manager-app-role (+ policy bookmark-manager-app-policy), CloudWatch:/cloudforge/bookmark-manager-api",
+    "\ud83d\udc0d Generated application code (initial): 5 files \u2014 FastAPI bookmark manager with a decoupled storage layer. `storage.py` exposes `BookmarkRepository` (DynamoDB table `bookmarks`, lazy table resolution, put/get/conditional-delete, tag-filtered paginated scan) and `ApiKeyProvider` (Secrets Manager `bookmark-manager/api-key`, JSON or plaintext, TTL cache with forced refresh on mismatch, optional env fallback); both boto3 factories honour AWS_ENDPOINT_URL and default region us-east-1. `app.py` defines the pydantic v2 models (BookmarkCreateRequest with http(s) URL validation and lowercased/de-duplicated tags, Bookmark, BookmarkListResponse, ErrorResponse), an `X-API-Key` dependency (401 missing, 403 invalid, 503 when secrets are unreachable, hmac.compare_digest comparison), uniform error handlers, and the endpoints GET /health (public), POST /bookmarks (201), GET /bookmarks?tag=&limit=, GET /bookmarks/{id}, DELETE /bookmarks/{id} (204/404). Tests use FastAPI's TestClient with dependency overrides plus fully stubbed boto3/table/secrets objects, so they run offline; only flask-free allowed packages (fastapi, uvicorn, boto3, pydantic) are used, no debug literals or hardcoded secrets, and the entrypoint binds 127.0.0.1 by default (HOST/PORT env configurable).",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform stack for the bookmark manager API, limited to the services in the shared plan and LocalStack Community Edition.\n\n- versions.tf: terraform block with required_version and hashicorp/aws pinned to ~> 5.0, plus the aws provider with default_tags (project, managed-by).\n- main.tf:\n  - aws_dynamodb_table.bookmarks \u2014 PAY_PER_REQUEST, hash key bookmark_id (S), GSI `bookmarks-tag-index` on tag (S) + bookmark_id (S) with ALL projection, point-in-time recovery enabled and server-side encryption enabled (CKV_AWS_28 / CKV_AWS_119).\n  - aws_secretsmanager_secret + secret_version `bookmark-manager/api-key` storing {\"api_key\": ...} JSON so the app can GetSecretValue at startup; recovery window 0 for clean LocalStack redeploys.\n  - aws_cloudwatch_log_group `/cloudforge/bookmark-manager-api` with 365-day retention (CKV_AWS_66).\n  - IAM role `bookmark-manager-app-role` (ecs-tasks service principal) and policy `bookmark-manager-app-policy` built with aws_iam_policy_document: DynamoDB item/query/scan actions scoped to the table ARN and the specific index ARN, secretsmanager:GetSecretValue/DescribeSecret scoped to the secret ARN, and logs:CreateLogStream/PutLogEvents/DescribeLogStreams scoped to the log group ARN and its log streams \u2014 no \"*\" actions or resources.\n- variables.tf: defaults match the plan's resource names (bookmarks, bookmarks-tag-index, bookmark-manager/api-key, /cloudforge/bookmark-manager-api, role/policy names) plus region, project, environment, retention and the API key value (sensitive).\n- outputs.tf: table name/ARN, index name, secret name/ARN, sensitive api_key, log group name, role and policy ARNs for wiring the app's environment variables.\n\nNo KMS customer managed keys are created because the plan restricts the stack to LocalStack Community services; the two checks that require a CMK (CKV_AWS_149, CKV_AWS_158) and the secret rotation check (CKV2_AWS_57) carry inline checkov skip comments with justifications. Every resource maps directly to an entry in the plan's aws_resources list \u2014 no S3, SQS, SNS, Lambda or API Gateway resources were generated.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u274c",
+    "\ud83d\uded1 Validation still failing after 0 correction iteration(s); the 0-iteration bound is reached (Temporal Blind Spot safeguard)."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "requirements.txt",
+    "README.md",
+    "tests/test_app.py"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}

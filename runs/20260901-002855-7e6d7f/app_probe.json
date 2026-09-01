@@ -1,0 +1,61 @@
+{
+  "run_id": "20260901-002855-7e6d7f",
+  "probed_at": "2026-09-01T13:28:56.131071+00:00",
+  "framework": "fastapi",
+  "localstack_url": "http://localhost:4566",
+  "base_url": "http://127.0.0.1:52284",
+  "launched": true,
+  "results": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "probe_path": "/health",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/expenses",
+      "probe_path": "/expenses",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/expenses",
+      "probe_path": "/expenses",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/expenses/{expense_id}",
+      "probe_path": "/expenses/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "PUT",
+      "path": "/expenses/{expense_id}",
+      "probe_path": "/expenses/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/expenses/{expense_id}",
+      "probe_path": "/expenses/smoke-id",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/expenses/summary",
+      "probe_path": "/expenses/summary",
+      "status": "422",
+      "serving": true
+    }
+  ],
+  "serving_endpoints": 7,
+  "total_endpoints": 7
+}

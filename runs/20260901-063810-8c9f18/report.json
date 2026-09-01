@@ -1,0 +1,295 @@
+{
+  "run_id": "20260901-063810-8c9f18",
+  "timestamp": "2026-09-01T13:42:36.190001+00:00",
+  "started_at": "2026-09-01T13:38:10.847335+00:00",
+  "finished_at": "2026-09-01T13:42:36.190001+00:00",
+  "wall_seconds": 265.3,
+  "node_seconds_sum": 335.9,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build a product-feedback service. Customers submit feedback with a rating from 1 to 5 and a comment. Feedback is stored in DynamoDB, and any submission with a rating of 1 or 2 triggers a notification to an SNS topic so support staff are alerted. Include endpoints to list feedback and to show the average rating.",
+  "benchmark_id": "M6-feedback",
+  "tier": "moderate",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "99f37c2df07ed19f308a86f2964dc7477f8a5647c1cfd516cd3c50140c37af12",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 3,
+      "domain_entities": 1,
+      "workflow_rules": 2,
+      "score": 8,
+      "rationale": "Conditional low-rating notification and average calculation span storage and messaging."
+    },
+    "congruence_checklist": [
+      "DynamoDB table for feedback",
+      "SNS topic for low-rating alerts",
+      "Notification triggered only for ratings 1-2",
+      "POST endpoint submitting feedback",
+      "GET endpoint listing feedback",
+      "Endpoint computing the average rating"
+    ]
+  },
+  "repository": {
+    "commit": "c2d61830aed5c8805b561bdbd30a7f6ab702f68f",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "product_feedback_service",
+    "summary": "A FastAPI JSON service that lets customers submit product feedback consisting of a 1-5 star rating and a free-text comment. Submissions are persisted in a DynamoDB table; any submission rated 1 or 2 is published to an SNS topic so support staff receive an alert. Additional read endpoints list stored feedback (optionally filtered by product) and return aggregate rating statistics such as the average rating and per-star distribution. The service runs as a standalone process and calls DynamoDB and SNS directly with boto3.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/feedback",
+        "purpose": "Submit new feedback (product_id, rating 1-5, comment, optional customer_email); persists the item to DynamoDB and publishes an SNS alert when rating <= 2. Returns the created feedback record."
+      },
+      {
+        "method": "GET",
+        "path": "/feedback",
+        "purpose": "List feedback records with optional product_id filter, min_rating/max_rating filters and a limit parameter; returns items ordered newest first."
+      },
+      {
+        "method": "GET",
+        "path": "/feedback/{feedback_id}",
+        "purpose": "Retrieve a single feedback record by its identifier; 404 if it does not exist."
+      },
+      {
+        "method": "GET",
+        "path": "/feedback/stats",
+        "purpose": "Return aggregate statistics: total feedback count, average rating (rounded to 2 decimals) and a count per rating value, optionally scoped to a product_id."
+      },
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness probe reporting service status and whether the DynamoDB table and SNS topic are reachable."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "Feedback",
+        "fields": [
+          "feedback_id: str (uuid4, partition key)",
+          "product_id: str (defaults to 'general' when omitted)",
+          "rating: int (1-5, validated)",
+          "comment: str (1-2000 chars)",
+          "customer_email: Optional[str]",
+          "created_at: str (ISO-8601 UTC timestamp)",
+          "alert_sent: bool (true when an SNS low-rating alert was published)"
+        ]
+      },
+      {
+        "name": "FeedbackCreateRequest",
+        "fields": [
+          "product_id: Optional[str]",
+          "rating: int (ge=1, le=5)",
+          "comment: str",
+          "customer_email: Optional[str]"
+        ]
+      },
+      {
+        "name": "FeedbackListResponse",
+        "fields": [
+          "items: List[Feedback]",
+          "count: int"
+        ]
+      },
+      {
+        "name": "FeedbackStats",
+        "fields": [
+          "product_id: Optional[str]",
+          "total_count: int",
+          "average_rating: float",
+          "rating_distribution: Dict[str, int] (keys '1'..'5')"
+        ]
+      },
+      {
+        "name": "LowRatingAlert",
+        "fields": [
+          "feedback_id: str",
+          "product_id: str",
+          "rating: int",
+          "comment: str",
+          "created_at: str"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "DynamoDB",
+        "name": "product-feedback",
+        "justification": "Primary store for feedback records as required by the spec. Partition key feedback_id (S), with a global secondary index product_id-created_at-index (product_id HASH, created_at RANGE) to support listing and averaging per product without a full scan. PAY_PER_REQUEST billing."
+      },
+      {
+        "service": "SNS",
+        "name": "low-rating-alerts",
+        "justification": "Topic the application publishes to whenever a submission has a rating of 1 or 2, so support staff are notified. Called directly by the backend via boto3 sns.publish."
+      },
+      {
+        "service": "IAM",
+        "name": "product-feedback-service-role",
+        "justification": "Role/policy granting the service least-privilege access: dynamodb:PutItem/GetItem/Query/Scan on the product-feedback table and its GSI, and sns:Publish on the low-rating-alerts topic."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/product-feedback/service-logs",
+        "justification": "Log group for application logs of submissions and alert publications, giving operators visibility into low-rating notification delivery."
+      }
+    ],
+    "assumptions": [
+      "No Lambda or API Gateway is planned: the spec describes a synchronous REST API run by the harness as its own service, and SNS notification is a direct publish, so no cloud-side execution is required.",
+      "Rating is an integer 1-5; out-of-range or non-integer ratings are rejected with HTTP 422.",
+      "'Low rating' means rating <= 2 (i.e. 1 or 2), matching the spec wording.",
+      "Feedback identifiers are server-generated UUID4 strings; clients cannot supply them.",
+      "product_id is optional in the request and defaults to 'general', allowing the service to work even when the caller does not track products.",
+      "Average rating is computed by the application over the queried items (Query on the GSI when product_id is given, otherwise Scan with a bounded page limit) rather than by a maintained counter, since volume is assumed modest.",
+      "No authentication is specified, so endpoints are public; the harness calls them directly over HTTP.",
+      "Listing is capped at a default limit of 50 items (max 200) to keep responses bounded.",
+      "SNS message is published as a JSON payload with a human-readable subject; no subscriptions are provisioned because subscriber endpoints were not specified.",
+      "If the SNS publish fails, the feedback is still stored and the response reports alert_sent=false rather than failing the submission."
+    ]
+  },
+  "max_iterations": 3,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_region.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_iam_policy_document.service_assume_role: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.service_assume_role: Read complete after 0s [id=267395925]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.service_permissions will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"service_permissions\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"FeedbackTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"sns:GetTopicAttributes\",\n              + \"sns:Publish\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"LowRatingAlertPublish\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogging\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"kms:DescribeKey\",\n              + \"kms:Encrypt\",\n              + \"kms:GenerateDataKey\",\n              + \"kms:GenerateDataKeyWithoutPlaintext\",\n              + \"kms:ReEncryptFrom\",\n              + \"kms:ReEncryptTo\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UseServiceCmk\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.service will be created\n  + resource \"aws_cloudwatch_log_group\" \"service\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + kms_key_id        = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/product-feedback/service-logs\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"        = \"/product-feedback/service-logs\"\n          + \"application\" = \"product_feedback_service\"\n          + \"environment\" = \"dev\"\n        }\n      + tags_all          = {\n          + \"Name\"        = \"/product-feedback/service-logs\"\n          + \"application\" = \"product_feedback_service\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"product-feedback-service\"\n        }\n    }\n\n  # aws_dynamodb_table.feedback will be created\n  + resource \"aws_dynamodb_table\" \"feedback\" {\n      + arn                         = (known after apply)\n      + billing_mode                = \"PAY_PER_REQUEST\"\n      + deletion_protection_enabled = false\n      + hash_key                    = \"feedback_id\"\n      + id                          = (known after apply)\n      + name                        = \"product-feedback\"\n      + read_capacity               = (known after apply)\n      + stream_arn                  = (known after apply)\n      + stream_label                = (known after apply)\n      + stream_view_type            = (known after apply)\n      + tags                        = {\n          + \"Name\"        = \"product-feedback\"\n          + \"application\" = \"product_feedback_service\"\n          + \"environment\" = \"dev\"\n        }\n      + tags_all                    = {\n          + \"Name\"        = \"product-feedback\"\n          + \"application\" = \"product_feedback_service\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"product-feedback-service\"\n        }\n      + write_capacity              = (known after apply)\n\n      + attribute {\n          + name = \"created_at\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"feedback_id\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"product_id\"\n          + type = \"S\"\n        }\n\n      + global_secondary_index {\n          + hash_key           = \"product_id\"\n          + name               = \"product_id-created_at-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"created_at\"\n          + read_capacity      = (known after apply)\n          + write_capacity     = (known after apply)\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl (known after apply)\n    }\n\n  # aws_iam_policy.service will be created\n  + resource \"aws_iam_policy\" \"service\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least-privilege access to the product-feedback table, low-rating-alerts topic and service log group\"\n      + id               = (known after apply)\n      + name             = \""
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.26
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "......................                                                   [100%]\n22 passed in 0.20s",
+      "duration_s": 0.7
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "[manager]\tWARNING\tTest in comment: container is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: needs is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: external is not a test name or id, ignoring\n[manager]\tWARNING\tTest in comment: binding is not a test name or id, ignoring\n[tester]\tWARNING\tnosec encountered (B104), but no failed test on file ./app.py:255",
+      "duration_s": 0.11
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 13.55
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 42 passed, 0 failed, 0 skipped.",
+      "duration_s": 2.41
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_region.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_iam_policy_document.service_assume_role: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_iam_policy_document.service_assume_role: Read complete after 0s [id=267395925]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.service_permissions will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"service_permissions\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:Scan\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"FeedbackTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"sns:GetTopicAttributes\",\n              + \"sns:Publish\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"LowRatingAlertPublish\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogging\"\n        }\n      + statement {\n          + actions   = [\n              + \"kms:Decrypt\",\n              + \"kms:DescribeKey\",\n              + \"kms:Encrypt\",\n              + \"kms:GenerateDataKey\",\n              + \"kms:GenerateDataKeyWithoutPlaintext\",\n              + \"kms:ReEncryptFrom\",\n              + \"kms:ReEncryptTo\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"UseServiceCmk\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.service will be created\n  + resource \"aws_cloudwatch_log_group\" \"service\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + kms_key_id        = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/product-feedback/service-logs\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags              = {\n          + \"Name\"        = \"/product-feedback/service-logs\"\n          + \"application\" = \"product_feedback_service\"\n          + \"environment\" = \"dev\"\n        }\n      + tags_all          = {\n          + \"Name\"        = \"/product-feedback/service-logs\"\n          + \"application\" = \"product_feedback_service\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"product-feedback-service\"\n        }\n    }\n\n  # aws_dynamodb_table.feedback will be created\n  + resource \"aws_dynamodb_table\" \"feedback\" {\n      + arn                         = (known after apply)\n      + billing_mode                = \"PAY_PER_REQUEST\"\n      + deletion_protection_enabled = false\n      + hash_key                    = \"feedback_id\"\n      + id                          = (known after apply)\n      + name                        = \"product-feedback\"\n      + read_capacity               = (known after apply)\n      + stream_arn                  = (known after apply)\n      + stream_label                = (known after apply)\n      + stream_view_type            = (known after apply)\n      + tags                        = {\n          + \"Name\"        = \"product-feedback\"\n          + \"application\" = \"product_feedback_service\"\n          + \"environment\" = \"dev\"\n        }\n      + tags_all                    = {\n          + \"Name\"        = \"product-feedback\"\n          + \"application\" = \"product_feedback_service\"\n          + \"environment\" = \"dev\"\n          + \"managed-by\"  = \"cloudforge-terraform\"\n          + \"project\"     = \"product-feedback-service\"\n        }\n      + write_capacity              = (known after apply)\n\n      + attribute {\n          + name = \"created_at\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"feedback_id\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"product_id\"\n          + type = \"S\"\n        }\n\n      + global_secondary_index {\n          + hash_key           = \"product_id\"\n          + name               = \"product_id-created_at-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"created_at\"\n          + read_capacity      = (known after apply)\n          + write_capacity     = (known after apply)\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n          + recovery_period_in_days = (known after apply)\n        }\n\n      + server_side_encryption {\n          + enabled     = true\n          + kms_key_arn = (known after apply)\n        }\n\n      + ttl (known after apply)\n    }\n\n  # aws_iam_policy.service will be created\n  + resource \"aws_iam_policy\" \"service\" {\n      + arn              = (known after apply)\n      + attachment_count = (known after apply)\n      + description      = \"Least-privilege access to the product-feedback table, low-rating-alerts topic and service log group\"\n      + id               = (known after apply)\n      + name             = \"",
+      "duration_s": 18.93
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 126,
+      "output_tokens": 1722,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2161,
+      "output_tokens": 23116,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2160,
+      "output_tokens": 7169,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 0.8429,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 22.4
+    },
+    {
+      "node": "generate_app",
+      "seconds": 208.0
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 69.5
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.1
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 16.0
+    },
+    {
+      "node": "deploy",
+      "seconds": 18.9
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 product_feedback_service (fastapi); AWS resources: DynamoDB:product-feedback, SNS:low-rating-alerts, IAM:product-feedback-service-role, CloudWatch:/product-feedback/service-logs",
+    "\ud83d\udc0d Generated application code (initial): 5 files \u2014 FastAPI product-feedback service split into `app.py` (routes, pydantic models, dependency-injected repository/notifier) and `storage.py` (boto3 DynamoDB repository + SNS notifier, both honouring `AWS_ENDPOINT_URL` and defaulting to region us-east-1, table `product-feedback`, topic `low-rating-alerts`). POST /feedback stores the record and publishes a JSON SNS alert for ratings <= 2 (storage succeeds even if SNS fails, reporting `alert_sent=false`); GET /feedback lists with product/rating/limit filters, GET /feedback/stats returns count, 2-decimal average and per-star distribution (declared before the `/feedback/{id}` route), GET /feedback/{id} returns 404 when missing, and /health reports DynamoDB/SNS reachability. `tests/test_app.py` exercises every endpoint with `TestClient` plus fake repository/notifier and unit-tests the storage layer with table/SNS doubles, Decimal decoding, GSI-query scan fallback and endpoint/region resolution \u2014 all offline with no AWS or network calls.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the product-feedback service, one-to-one with the plan's aws_resources list: a `product-feedback` DynamoDB table (feedback_id hash key, `product_id-created_at-index` GSI with ALL projection, PAY_PER_REQUEST, point-in-time recovery, KMS SSE), a `low-rating-alerts` SNS topic with KMS SSE, a `/product-feedback/service-logs` CloudWatch log group (365-day retention, KMS encrypted), and a `product-feedback-service-role` IAM role plus a least-privilege policy scoped to exactly the table/GSI ARNs (PutItem/GetItem/Query/Scan/DescribeTable), the topic ARN (Publish/GetTopicAttributes), the log group ARN/stream prefix, and the CMK \u2014 no wildcard actions or resources. A customer-managed KMS key with rotation enabled backs all encryption requirements, with a key policy granting CloudWatch Logs and SNS the needed grants. Files: versions.tf (terraform block pinning hashicorp/aws ~> 5.0 and provider default_tags with project and managed-by), variables.tf (defaults matching plan names), main.tf, outputs.tf. No Lambda, API Gateway, RDS/ECS/EKS/ElastiCache \u2014 only LocalStack-supported services, so `terraform validate`, Checkov, and a LocalStack apply should all pass.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "tests/test_app.py",
+    "requirements.txt",
+    "README.md"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}
