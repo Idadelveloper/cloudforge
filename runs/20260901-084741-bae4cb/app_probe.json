@@ -1,0 +1,75 @@
+{
+  "run_id": "20260901-084741-bae4cb",
+  "probed_at": "2026-09-01T16:06:14.658831+00:00",
+  "framework": "fastapi",
+  "localstack_url": "http://localhost:4566",
+  "base_url": "http://127.0.0.1:62916",
+  "launched": true,
+  "results": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "probe_path": "/health",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/documents",
+      "probe_path": "/documents",
+      "status": "401",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/documents",
+      "probe_path": "/documents",
+      "status": "200",
+      "serving": true
+    },
+    {
+      "method": "POST",
+      "path": "/documents/{document_id}/versions",
+      "probe_path": "/documents/smoke-id/versions",
+      "status": "401",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/documents/{document_id}/versions",
+      "probe_path": "/documents/smoke-id/versions",
+      "status": "404",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/documents/{document_id}/versions/{version}",
+      "probe_path": "/documents/smoke-id/versions/smoke-id",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/documents/{document_id}/versions/{version}/download-url",
+      "probe_path": "/documents/smoke-id/versions/smoke-id/download-url",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "GET",
+      "path": "/search",
+      "probe_path": "/search",
+      "status": "422",
+      "serving": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/documents/{document_id}",
+      "probe_path": "/documents/smoke-id",
+      "status": "401",
+      "serving": true
+    }
+  ],
+  "serving_endpoints": 9,
+  "total_endpoints": 9
+}

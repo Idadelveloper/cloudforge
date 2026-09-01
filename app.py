@@ -664,10 +664,13 @@ def render_app() -> None:
             st.success(f"LocalStack running at {LOCALSTACK_URL}", icon="🟢")
         else:
             st.error(
-                f"LocalStack not reachable at {LOCALSTACK_URL}. Run `./start.sh`, or start "
-                "`cloudforge-localstack` manually before enabling deployment.",
+                f"LocalStack not reachable at {LOCALSTACK_URL}. If you just ran the reset "
+                "script, it is probably still booting — recheck below.",
                 icon="🔴",
             )
+        # Status is captured at render time; a click forces a fresh check
+        # (needed right after ./scripts/reset_localstack.sh recreates the container).
+        st.button("🔄 Recheck status")
 
         max_iterations = st.slider(
             "Max self-correction iterations",

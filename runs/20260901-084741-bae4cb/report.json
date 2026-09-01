@@ -1,0 +1,319 @@
+{
+  "run_id": "20260901-084741-bae4cb",
+  "timestamp": "2026-09-01T15:57:36.528611+00:00",
+  "started_at": "2026-09-01T15:47:41.768805+00:00",
+  "finished_at": "2026-09-01T15:57:36.528611+00:00",
+  "wall_seconds": 594.8,
+  "node_seconds_sum": 701.0,
+  "model": "claude-opus-5",
+  "max_output_tokens": 64000,
+  "status": "success",
+  "spec": "Build a document-store backend. Documents are uploaded to a versioned S3 bucket; their metadata (title, author, tags, version) is indexed in DynamoDB. Users can upload new versions of a document, list versions, search documents by tag, and download a specific version via a presigned URL.",
+  "benchmark_id": "M7-documents",
+  "tier": "moderate",
+  "evaluation_condition": "bounded_correction",
+  "benchmark": {
+    "fingerprint": "092d7a91158a4db2d45a0710e176b8c5ac72a7115c37d2fd24f9ec67c92ad8af",
+    "complexity": {
+      "cloud_components": 2,
+      "aws_service_types": 2,
+      "api_operations": 4,
+      "domain_entities": 2,
+      "workflow_rules": 3,
+      "score": 11,
+      "rationale": "Versioning, tag search, and presigned retrieval coordinate document and version metadata."
+    },
+    "congruence_checklist": [
+      "Versioned S3 bucket for documents",
+      "DynamoDB table indexing document metadata",
+      "Upload flow creating new versions",
+      "GET endpoint listing a document's versions",
+      "Search endpoint filtering by tag",
+      "Presigned download of a specific version"
+    ]
+  },
+  "repository": {
+    "commit": "d0eaac1ac3b7e84ad16074b22e19d91211decbc8",
+    "dirty": false
+  },
+  "plan": {
+    "app_name": "document_store",
+    "summary": "A FastAPI document-store service that stores document binaries in a versioned S3 bucket and indexes metadata (title, author, tags, version) in DynamoDB. Clients can upload documents and new versions, list all versions of a document, search documents by tag via a DynamoDB GSI, and obtain a time-limited presigned S3 URL to download a specific version. The service runs as a standalone Python process that calls S3 and DynamoDB directly with boto3.",
+    "framework": "fastapi",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "purpose": "Liveness/readiness check reporting that the service can reach its S3 bucket and DynamoDB table."
+      },
+      {
+        "method": "POST",
+        "path": "/documents",
+        "purpose": "Upload a new document (multipart file plus title, author, tags); creates document_id, writes object to the versioned S3 bucket and version 1 metadata to DynamoDB."
+      },
+      {
+        "method": "GET",
+        "path": "/documents",
+        "purpose": "List indexed documents (latest version of each), optionally filtered by author, with pagination."
+      },
+      {
+        "method": "POST",
+        "path": "/documents/{document_id}/versions",
+        "purpose": "Upload a new version of an existing document; puts a new S3 object version and records an incremented version metadata item."
+      },
+      {
+        "method": "GET",
+        "path": "/documents/{document_id}/versions",
+        "purpose": "List all versions of a document with version numbers, S3 version ids, sizes and timestamps."
+      },
+      {
+        "method": "GET",
+        "path": "/documents/{document_id}/versions/{version}",
+        "purpose": "Fetch metadata for one specific version of a document."
+      },
+      {
+        "method": "GET",
+        "path": "/documents/{document_id}/versions/{version}/download-url",
+        "purpose": "Generate and return a presigned S3 GET URL (with expiry) for the specific S3 object version."
+      },
+      {
+        "method": "GET",
+        "path": "/search",
+        "purpose": "Search documents by tag (query param tag) using the tag GSI; returns matching document versions."
+      },
+      {
+        "method": "DELETE",
+        "path": "/documents/{document_id}",
+        "purpose": "Delete a document: remove all metadata items and delete the S3 object (all versions)."
+      }
+    ],
+    "data_models": [
+      {
+        "name": "DocumentVersion",
+        "fields": [
+          "document_id (string, partition key)",
+          "version (number, sort key)",
+          "title (string)",
+          "author (string)",
+          "tags (list of strings)",
+          "s3_key (string)",
+          "s3_version_id (string)",
+          "content_type (string)",
+          "size_bytes (number)",
+          "checksum (string, optional)",
+          "created_at (ISO8601 string)",
+          "is_latest (boolean)"
+        ]
+      },
+      {
+        "name": "TagIndexEntry",
+        "fields": [
+          "tag (string, GSI partition key)",
+          "created_at (string, GSI sort key)",
+          "document_id (string)",
+          "version (number)",
+          "title (string)",
+          "author (string)"
+        ]
+      },
+      {
+        "name": "UploadRequest",
+        "fields": [
+          "title (string, required)",
+          "author (string, required)",
+          "tags (comma-separated string or list, optional)",
+          "file (multipart binary, required)"
+        ]
+      },
+      {
+        "name": "PresignedUrlResponse",
+        "fields": [
+          "document_id (string)",
+          "version (number)",
+          "url (string)",
+          "expires_in_seconds (number)",
+          "expires_at (ISO8601 string)"
+        ]
+      }
+    ],
+    "aws_resources": [
+      {
+        "service": "S3",
+        "name": "document-store-documents",
+        "justification": "Stores the uploaded document binaries; versioning enabled so each re-upload creates a new S3 object version referenced by the metadata and used for presigned per-version downloads."
+      },
+      {
+        "service": "DynamoDB",
+        "name": "documents-metadata",
+        "justification": "Primary metadata index keyed by document_id (HASH) and version (RANGE) supporting version listing and per-version metadata lookups; includes a tag-search GSI (tag/created_at) plus an author GSI for the list endpoint."
+      },
+      {
+        "service": "IAM",
+        "name": "document-store-service-role",
+        "justification": "Role/policy granting the backend service the s3:PutObject/GetObject/ListBucketVersions/DeleteObjectVersion permissions on the bucket and dynamodb:PutItem/GetItem/Query/DeleteItem on the table and its indexes."
+      },
+      {
+        "service": "CloudWatch",
+        "name": "/cloudforge/document-store",
+        "justification": "Log group the application writes operational logs and upload/search metrics to for observability."
+      },
+      {
+        "service": "Secrets Manager",
+        "name": "document-store/app-config",
+        "justification": "Holds the service configuration secret (API key used to authorize upload/delete calls and presigned-URL expiry settings) which the app reads at startup."
+      }
+    ],
+    "assumptions": [
+      "No specification of async or scheduled processing, so no Lambda, SQS, SNS or API Gateway resources are planned; the FastAPI service is started by the harness and calls S3/DynamoDB directly.",
+      "Version numbers are monotonically increasing integers starting at 1 per document, maintained by the application alongside the native S3 version id.",
+      "Tag search is exact-match on a single tag value (case-normalised to lowercase) served by a DynamoDB GSI rather than a full-text engine.",
+      "Presigned download URLs default to a 900-second (15 minute) expiry, overridable by an expires_in query parameter capped at 3600 seconds.",
+      "Documents are identified by a server-generated UUID; titles are not required to be unique.",
+      "Authentication is a simple static API key from Secrets Manager on write endpoints; no multi-tenant user model is implied by the spec.",
+      "Maximum upload size is assumed to be 10 MB and files are streamed to S3 in a single PutObject call.",
+      "JSON responses throughout, with multipart/form-data only for the upload endpoints."
+    ]
+  },
+  "max_iterations": 3,
+  "iterations_used": 0,
+  "deploy": {
+    "enabled": true,
+    "skipped": false,
+    "passed": true,
+    "output": "data.aws_region.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\ndata.aws_iam_policy_document.service_assume_role: Reading...\ndata.aws_iam_policy_document.service_assume_role: Read complete after 0s [id=3479577272]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.service will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"service\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:DeleteObject\",\n              + \"s3:DeleteObjectVersion\",\n              + \"s3:GetObject\",\n              + \"s3:GetObjectVersion\",\n              + \"s3:GetObjectVersionAttributes\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"DocumentBucketObjectAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:GetBucketLocation\",\n              + \"s3:GetBucketVersioning\",\n              + \"s3:ListBucket\",\n              + \"s3:ListBucketVersions\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"DocumentBucketListAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:BatchGetItem\",\n              + \"dynamodb:BatchWriteItem\",\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"MetadataTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:Query\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"MetadataIndexQueryAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogging\"\n        }\n      + statement {\n          + actions   = [\n              + \"secretsmanager:DescribeSecret\",\n              + \"secretsmanager:GetSecretValue\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ReadApplicationConfigSecret\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.app will be created\n  + resource \"aws_cloudwatch_log_group\" \"app\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/cloudforge/document-store\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags_all          = {\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"document_store\"\n        }\n    }\n\n  # aws_dynamodb_table.documents_metadata will be created\n  + resource \"aws_dynamodb_table\" \"documents_metadata\" {\n      + arn                         = (known after apply)\n      + billing_mode                = \"PAY_PER_REQUEST\"\n      + deletion_protection_enabled = false\n      + hash_key                    = \"document_id\"\n      + id                          = (known after apply)\n      + name                        = \"documents-metadata\"\n      + range_key                   = \"version\"\n      + read_capacity               = (known after apply)\n      + stream_arn                  = (known after apply)\n      + stream_label                = (known after apply)\n      + stream_view_type            = (known after apply)\n      + tags_all                    = {\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"document_store\"\n        }\n      + write_capacity              = (known after apply)\n\n      + attribute {\n          + name = \"author\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"created_at\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"document_id\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"tag\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"version\"\n          + type = \"N\"\n        }\n\n      + global_secondary_index {\n          + hash_key           = \"author\"\n          + name               = \"author-created_at-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"created_at\"\n          + read_capacity      = (known after apply)\n          + write_capacity     = (known after apply)\n        }\n      + global_secondary_index {\n          + hash_key           = \"tag\"\n          + name               = \"tag-created_at-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"created_at\"\n          + read_capacity      = (known after apply)\n          + write_capacity     = (known after apply)\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n         "
+  },
+  "validation_pass_rate_per_iteration": [
+    {
+      "iteration": 0,
+      "passed": 6,
+      "failed": 0
+    }
+  ],
+  "validations": [
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "flake8",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.29
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "pytest",
+      "passed": true,
+      "output": "................                                                         [100%]\n16 passed in 0.22s",
+      "duration_s": 0.79
+    },
+    {
+      "iteration": 0,
+      "target": "app",
+      "tool": "bandit",
+      "passed": true,
+      "output": "clean",
+      "duration_s": 0.14
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "terraform validate",
+      "passed": true,
+      "output": "Success! The configuration is valid.",
+      "duration_s": 16.7
+    },
+    {
+      "iteration": 0,
+      "target": "iac",
+      "tool": "checkov",
+      "passed": true,
+      "output": "Checkov: 62 passed, 0 failed, 10 skipped.",
+      "duration_s": 2.79
+    },
+    {
+      "iteration": 0,
+      "target": "deploy",
+      "tool": "tflocal apply",
+      "passed": true,
+      "output": "data.aws_region.current: Reading...\ndata.aws_caller_identity.current: Reading...\ndata.aws_region.current: Read complete after 0s [id=us-east-1]\ndata.aws_caller_identity.current: Read complete after 0s [id=000000000000]\ndata.aws_iam_policy_document.service_assume_role: Reading...\ndata.aws_iam_policy_document.service_assume_role: Read complete after 0s [id=3479577272]\n\nTerraform used the selected providers to generate the following execution\nplan. Resource actions are indicated with the following symbols:\n  + create\n <= read (data resources)\n\nTerraform will perform the following actions:\n\n  # data.aws_iam_policy_document.service will be read during apply\n  # (config refers to values not yet known)\n <= data \"aws_iam_policy_document\" \"service\" {\n      + id            = (known after apply)\n      + json          = (known after apply)\n      + minified_json = (known after apply)\n\n      + statement {\n          + actions   = [\n              + \"s3:DeleteObject\",\n              + \"s3:DeleteObjectVersion\",\n              + \"s3:GetObject\",\n              + \"s3:GetObjectVersion\",\n              + \"s3:GetObjectVersionAttributes\",\n              + \"s3:PutObject\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"DocumentBucketObjectAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"s3:GetBucketLocation\",\n              + \"s3:GetBucketVersioning\",\n              + \"s3:ListBucket\",\n              + \"s3:ListBucketVersions\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"DocumentBucketListAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:BatchGetItem\",\n              + \"dynamodb:BatchWriteItem\",\n              + \"dynamodb:DeleteItem\",\n              + \"dynamodb:DescribeTable\",\n              + \"dynamodb:GetItem\",\n              + \"dynamodb:PutItem\",\n              + \"dynamodb:Query\",\n              + \"dynamodb:UpdateItem\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"MetadataTableAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"dynamodb:Query\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"MetadataIndexQueryAccess\"\n        }\n      + statement {\n          + actions   = [\n              + \"logs:CreateLogStream\",\n              + \"logs:DescribeLogStreams\",\n              + \"logs:PutLogEvents\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n              + (known after apply),\n            ]\n          + sid       = \"ApplicationLogging\"\n        }\n      + statement {\n          + actions   = [\n              + \"secretsmanager:DescribeSecret\",\n              + \"secretsmanager:GetSecretValue\",\n            ]\n          + effect    = \"Allow\"\n          + resources = [\n              + (known after apply),\n            ]\n          + sid       = \"ReadApplicationConfigSecret\"\n        }\n    }\n\n  # aws_cloudwatch_log_group.app will be created\n  + resource \"aws_cloudwatch_log_group\" \"app\" {\n      + arn               = (known after apply)\n      + id                = (known after apply)\n      + log_group_class   = (known after apply)\n      + name              = \"/cloudforge/document-store\"\n      + name_prefix       = (known after apply)\n      + retention_in_days = 365\n      + skip_destroy      = false\n      + tags_all          = {\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"document_store\"\n        }\n    }\n\n  # aws_dynamodb_table.documents_metadata will be created\n  + resource \"aws_dynamodb_table\" \"documents_metadata\" {\n      + arn                         = (known after apply)\n      + billing_mode                = \"PAY_PER_REQUEST\"\n      + deletion_protection_enabled = false\n      + hash_key                    = \"document_id\"\n      + id                          = (known after apply)\n      + name                        = \"documents-metadata\"\n      + range_key                   = \"version\"\n      + read_capacity               = (known after apply)\n      + stream_arn                  = (known after apply)\n      + stream_label                = (known after apply)\n      + stream_view_type            = (known after apply)\n      + tags_all                    = {\n          + \"managed-by\" = \"cloudforge-terraform\"\n          + \"project\"    = \"document_store\"\n        }\n      + write_capacity              = (known after apply)\n\n      + attribute {\n          + name = \"author\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"created_at\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"document_id\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"tag\"\n          + type = \"S\"\n        }\n      + attribute {\n          + name = \"version\"\n          + type = \"N\"\n        }\n\n      + global_secondary_index {\n          + hash_key           = \"author\"\n          + name               = \"author-created_at-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"created_at\"\n          + read_capacity      = (known after apply)\n          + write_capacity     = (known after apply)\n        }\n      + global_secondary_index {\n          + hash_key           = \"tag\"\n          + name               = \"tag-created_at-index\"\n          + non_key_attributes = []\n          + projection_type    = \"ALL\"\n          + range_key          = \"created_at\"\n          + read_capacity      = (known after apply)\n          + write_capacity     = (known after apply)\n        }\n\n      + point_in_time_recovery {\n          + enabled                 = true\n         ",
+      "duration_s": 62.53
+    }
+  ],
+  "failure_taxonomy": [],
+  "usage": [
+    {
+      "purpose": "specification parsing",
+      "model": "claude-opus-5",
+      "input_tokens": 111,
+      "output_tokens": 1822,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1300
+    },
+    {
+      "purpose": "application code",
+      "model": "claude-opus-5",
+      "input_tokens": 2303,
+      "output_tokens": 52052,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 1048
+    },
+    {
+      "purpose": "Terraform",
+      "model": "claude-opus-5",
+      "input_tokens": 2302,
+      "output_tokens": 11131,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 937
+    }
+  ],
+  "estimated_cost_usd": 1.6692,
+  "timings": [
+    {
+      "node": "parse_spec",
+      "seconds": 23.1
+    },
+    {
+      "node": "generate_app",
+      "seconds": 489.5
+    },
+    {
+      "node": "generate_iac",
+      "seconds": 105.2
+    },
+    {
+      "node": "validate_app",
+      "seconds": 1.2
+    },
+    {
+      "node": "validate_iac",
+      "seconds": 19.5
+    },
+    {
+      "node": "deploy",
+      "seconds": 62.5
+    }
+  ],
+  "events": [
+    "\ud83e\udded Parsed specification \u2192 document_store (fastapi); AWS resources: S3:document-store-documents, DynamoDB:documents-metadata, IAM:document-store-service-role, CloudWatch:/cloudforge/document-store, Secrets Manager:document-store/app-config",
+    "\ud83d\udc0d Generated application code (initial): 6 files \u2014 Generated a FastAPI document-store backend with a decoupled storage layer.\n\n- `app.py`: FastAPI app exposing all nine planned endpoints (health, upload, list, new version, list versions, get version, presigned download URL, tag search, delete). Uploads accept `multipart/form-data` or a JSON base64 envelope; write endpoints are guarded by an `X-API-Key` header checked with `hmac.compare_digest` against a key from env or Secrets Manager. Pydantic response models throughout; repository is injected via `Depends(get_repository)` so tests can override it.\n- `storage.py`: `Settings` from env vars (bucket `document-store-documents`, table `documents-metadata`, `tag-index`/`author-index` GSIs, presign expiry 900/3600 cap, 10 MB upload limit), all boto3 clients honouring `AWS_ENDPOINT_URL` and defaulting to `us-east-1`. `AwsDocumentRepository` implements versioned S3 PutObject + DynamoDB metadata items (monotonic version numbers, `is_latest` maintenance, tag GSI query with scan fallback, presigned per-version URLs, full delete of object versions). `InMemoryDocumentRepository` provides an offline implementation.\n- `uploads.py`: dependency-free stdlib multipart/form-data parser (no python-multipart requirement).\n- `tests/test_app.py`: TestClient tests for every endpoint (auth, validation, size limit, pagination, version lifecycle, presign, search, delete) plus fake boto3 S3/DynamoDB stubs exercising the AWS repository \u2014 fully offline, no network or LocalStack.\n- `requirements.txt` (fastapi, uvicorn, boto3, pydantic) and `README.md` with config table and run instructions. No `0.0.0.0` literals, no hardcoded secrets, lines under 120 chars.",
+    "\ud83c\udfd7\ufe0f Generated Terraform (initial): 4 files \u2014 Terraform for the document_store backend, covering exactly the five planned AWS resources plus a required access-log bucket.\n\n- versions.tf: terraform block pinning hashicorp/aws ~> 5.0 (and hashicorp/random ~> 3.5 for the generated API key) with provider default_tags for project and managed-by.\n- main.tf:\n  - S3 `document-store-documents`: versioning enabled (required for per-version presigned downloads), SSE-S3 with bucket keys, full public access block, BucketOwnerEnforced ownership, lifecycle rule (non-current version expiry + abort incomplete multipart), and server access logging into a dedicated hardened log bucket (which is itself encrypted, versioned, PAB-blocked, lifecycle-managed and self-logging).\n  - DynamoDB `documents-metadata`: PAY_PER_REQUEST, hash `document_id` / range `version`, GSIs `tag-created_at-index` (tag search) and `author-created_at-index` (list by author), point-in-time recovery and server-side encryption enabled.\n  - CloudWatch log group `/cloudforge/document-store` with 365-day retention.\n  - Secrets Manager `document-store/app-config` holding a randomly generated API key plus presigned URL expiry, max upload size, bucket/table/index names for app startup.\n  - IAM `document-store-service-role` with a least-privilege policy: object-level S3 actions scoped to the bucket's objects, bucket listing/versioning scoped to the bucket ARN, DynamoDB item + query actions on the table, Query only on the two index ARNs, log stream writes on the specific log group, and GetSecretValue on the single secret ARN. No wildcard actions or resources anywhere.\n- variables.tf: defaults matching the plan's resource names; outputs.tf exposes bucket, table, index, role, log group and secret identifiers for the application.\n- LocalStack-safe: only S3, DynamoDB, IAM, CloudWatch Logs and Secrets Manager; no Lambda/RDS/ECS. Checkov KMS-CMK/replication/rotation checks that are impossible on LocalStack Community are handled with explicit, documented `checkov:skip` comments rather than left failing.",
+    "\ud83d\udd0e App validation (iteration 0): flake8 \u2705, pytest \u2705, bandit \u2705",
+    "\ud83d\udd0e IaC validation (iteration 0): terraform validate \u2705, checkov \u2705",
+    "\u2705 All validations passed.",
+    "\ud83d\ude80 Deployed to LocalStack successfully."
+  ],
+  "app_files": [
+    "app.py",
+    "storage.py",
+    "uploads.py",
+    "requirements.txt",
+    "README.md",
+    "tests/test_app.py"
+  ],
+  "iac_files": [
+    "versions.tf",
+    "variables.tf",
+    "main.tf",
+    "outputs.tf"
+  ]
+}
