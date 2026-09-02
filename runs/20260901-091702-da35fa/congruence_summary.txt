@@ -1,0 +1,7 @@
+run_id: 20260901-091702-da35fa
+benchmark: C1-orders
+app_coverage: 6/6
+iac_coverage: 6/6
+joint_congruence: 6/6
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Honest repair (skips constant 6). Correctly wired Lambda worker (congruent addition). Probe 7/7.

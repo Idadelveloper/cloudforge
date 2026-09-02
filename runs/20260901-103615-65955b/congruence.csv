@@ -1,0 +1,7 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,Central SNS topic for events,True,True,True
+2,Per-channel SQS queues subscribed to the topic,True,True,True
+3,DynamoDB table for subscriptions,True,True,True
+4,POST endpoint registering a subscriber,True,True,True
+5,Publish endpoint pushing events to the topic,True,True,True
+6,Endpoint reporting per-channel message counts,True,True,True

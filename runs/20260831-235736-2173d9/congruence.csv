@@ -1,0 +1,7 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,DynamoDB storage for events and registrations,True,True,True
+2,SQS queue receiving registration events,True,True,True
+3,POST endpoint creating an event,True,True,True
+4,POST endpoint registering an attendee,True,True,True
+5,Capacity limit enforced with rejection when full,True,True,True
+6,GET endpoint listing an event's registrations,True,True,True

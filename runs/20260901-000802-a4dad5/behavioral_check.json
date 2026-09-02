@@ -1,0 +1,30 @@
+{
+  "run_id": "20260901-000802-a4dad5",
+  "scenario": "m4-capacity",
+  "checked_at": "2026-09-01T21:46:27.473041+00:00",
+  "localstack_url": "http://localhost:4566",
+  "procedure": "operator-directed batch pass per problems-log P19",
+  "checks": [
+    {
+      "check": "create event cap=2",
+      "passed": true,
+      "detail": "{'event_id': 'b4a8d335-b7e2-4a39-bd1a-ef3f493897ab', 'title': 'Demo', 'date': '2026-09-15', 'capacity': 2, 'registered_count': 0, 'remaining_capacity': 2, 'created_at': '2026-09-01T21:46:27.262580+00:00'}"
+    },
+    {
+      "check": "first two registrations accepted",
+      "passed": true,
+      "detail": "[201, 201, 409]"
+    },
+    {
+      "check": "third rejected (capacity)",
+      "passed": true,
+      "detail": "[201, 201, 409]"
+    },
+    {
+      "check": "exactly 2 stored",
+      "passed": true,
+      "detail": "2"
+    }
+  ],
+  "all_passed": true
+}

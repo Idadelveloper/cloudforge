@@ -1,0 +1,7 @@
+run_id: 20260901-102639-5a8c5d
+benchmark: C3-notifications
+app_coverage: 6/6
+iac_coverage: 6/6
+joint_congruence: 6/6
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Statics-failed (own pytest 1/33). Fan-out via topic subscriptions + queue policies. IaC honest 51/0/0.

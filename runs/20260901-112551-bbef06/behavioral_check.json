@@ -1,0 +1,30 @@
+{
+  "run_id": "20260901-112551-bbef06",
+  "scenario": "c5-threshold",
+  "checked_at": "2026-09-01T21:50:35.755703+00:00",
+  "localstack_url": "http://localhost:4566",
+  "procedure": "operator-directed batch pass per problems-log P19",
+  "checks": [
+    {
+      "check": "register device thr=30",
+      "passed": true,
+      "detail": "HTTP 201"
+    },
+    {
+      "check": "25C -> no alert",
+      "passed": true,
+      "detail": "alert_triggered=False msgs=0"
+    },
+    {
+      "check": "35C -> alert fires",
+      "passed": true,
+      "detail": "alert_triggered=True msgs=1"
+    },
+    {
+      "check": "daily stats reflect 25/35",
+      "passed": true,
+      "detail": "{\"device_id\": \"dev1\", \"date\": \"2026-09-01\", \"min_celsius\": 25.0, \"max_celsius\": 35.0, \"avg_celsius\": 30.0, \"count\": 2}"
+    }
+  ],
+  "all_passed": true
+}

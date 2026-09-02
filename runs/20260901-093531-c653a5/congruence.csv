@@ -1,0 +1,7 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,DynamoDB table for orders,True,True,True
+2,SQS queue for fulfilment events,True,True,True
+3,SNS topic for status-change notifications,True,True,True
+4,POST endpoint creating an order,True,True,True
+5,GET endpoint returning order status,True,True,True
+6,GET endpoint listing orders by customer,True,True,True

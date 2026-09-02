@@ -1,0 +1,20 @@
+{
+  "run_id": "20260901-063810-8c9f18",
+  "scenario": "m6-alert",
+  "checked_at": "2026-09-01T21:48:15.964060+00:00",
+  "localstack_url": "http://localhost:4566",
+  "procedure": "operator-directed batch pass per problems-log P19",
+  "checks": [
+    {
+      "check": "rating 5 -> no alert",
+      "passed": true,
+      "detail": "0 messages"
+    },
+    {
+      "check": "rating 1 -> SNS alert published",
+      "passed": true,
+      "detail": "{\"Type\": \"Notification\", \"MessageId\": \"96b5614c-60d0-4ec7-abf9-61255c5539d6\", \"TopicArn\": \"arn:aws:sns:us-east-1:000000000000:low-rating-alerts\", \"Message\": \"{\\\"feedback_id\\\": \\\"475469ff-e68f-454d-bbf2-054b30ca30e9\\\", \\\"product_id\\\": \\\"p1\\\", \\\"rating\\\": 1, \\\"comment\\\": \\\"awful\\\", \\\"created_at\\\": \\\"2"
+    }
+  ],
+  "all_passed": true
+}

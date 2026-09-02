@@ -1,0 +1,7 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,S3 bucket for file storage,True,True,True
+2,DynamoDB table for file metadata,True,True,True
+3,Endpoint issuing presigned upload URLs,True,True,True
+4,GET endpoint listing a client's files,True,True,True
+5,DELETE endpoint removing a file,True,True,True
+6,Endpoint aggregating storage usage per owner,True,True,True

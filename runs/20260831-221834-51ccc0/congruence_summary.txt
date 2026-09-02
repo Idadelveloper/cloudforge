@@ -1,0 +1,7 @@
+run_id: 20260831-221834-51ccc0
+benchmark: S5-inventory
+app_coverage: 5/5
+iac_coverage: 5/5
+joint_congruence: 5/5
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Bonus PATCH endpoint (congruent). Honest 0 skips. Probe 6/6; behavioural 4/4 (incl. 409 over-draw).

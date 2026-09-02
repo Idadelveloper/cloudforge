@@ -1,0 +1,9 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,DynamoDB device registry,True,True,True
+2,DynamoDB storage for readings,True,True,True
+3,SNS topic for threshold alerts,True,True,True
+4,Alert fires only above the per-device threshold,True,True,True
+5,POST endpoint registering a device,True,True,True
+6,Endpoint setting a device threshold,True,True,True
+7,Ingest endpoint storing readings,True,True,True
+8,Endpoint returning daily min/max/average per device,True,True,True

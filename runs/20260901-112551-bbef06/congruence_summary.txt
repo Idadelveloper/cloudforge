@@ -1,0 +1,7 @@
+run_id: 20260901-112551-bbef06
+benchmark: C5-telemetry
+app_coverage: 8/8
+iac_coverage: 8/8
+joint_congruence: 8/8
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Honest 0 skips; route surface identical to baseline draw. Probe 8/8; behavioural threshold+stats 4/4.

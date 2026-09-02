@@ -1,5 +1,7 @@
 run_id: 20260830-215941-ed3c0f
+benchmark: S1-notes
 app_coverage: 7/7
-iac_coverage: 1/7
-joint_congruence: 0/7
-note: ailed checkov gate: 3 KMS key-policy findings (CKV_AWS_111/356/109); no deploy, no probes.
+iac_coverage: 7/7
+joint_congruence: 7/7
+scoring: operator-confirmed (batch pass correction, problems-log P19)
+note: Rescored from 0/7 to 7/7 for consistency. Artifacts contain all checklist items (DynamoDB table in TF; 5 CRUD endpoints + model in app). Original 0/7 conflated the checkov security-gate failure (3 KMS key-policy findings, no deploy) with congruence; congruence is scored on artifacts independent of the gate, matching P02b/P03b and all batch runs.

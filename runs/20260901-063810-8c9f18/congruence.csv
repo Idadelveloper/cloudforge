@@ -1,0 +1,7 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,DynamoDB table for feedback,True,True,True
+2,SNS topic for low-rating alerts,True,True,True
+3,Notification triggered only for ratings 1-2,True,True,True
+4,POST endpoint submitting feedback,True,True,True
+5,GET endpoint listing feedback,True,True,True
+6,Endpoint computing the average rating,True,True,True

@@ -1,0 +1,8 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,DynamoDB storage for posts and comments,True,True,True
+2,S3 bucket for post images,True,True,True
+3,SQS moderation queue for new comments,True,True,True
+4,POST endpoint creating a post,True,True,True
+5,GET endpoints listing and reading posts,True,True,True
+6,Comment submission routed to moderation,True,True,True
+7,Approval endpoint publishing moderated comments,True,True,True

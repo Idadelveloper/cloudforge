@@ -1,0 +1,7 @@
+run_id: 20260901-064554-4336ae
+benchmark: M7-documents
+app_coverage: 6/6
+iac_coverage: 6/6
+joint_congruence: 6/6
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Statics-failed (338 + 145x2). Versioned bucket; most version-aware IAM of campaign (s3:*Version*).

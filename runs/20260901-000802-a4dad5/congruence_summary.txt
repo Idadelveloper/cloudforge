@@ -1,0 +1,7 @@
+run_id: 20260901-000802-a4dad5
+benchmark: M4-registration
+app_coverage: 6/6
+iac_coverage: 6/6
+joint_congruence: 6/6
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Honest repair; 4 of 5 skips false-claim. Probe 7/7; behavioural capacity 4/4 (cap 2 -> 409 on third).

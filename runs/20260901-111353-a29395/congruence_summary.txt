@@ -1,0 +1,7 @@
+run_id: 20260901-111353-a29395
+benchmark: C5-telemetry
+app_coverage: 8/8
+iac_coverage: 8/8
+joint_congruence: 8/8
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Statics-failed (KMS trio kill #5) on honest 0-skip draw. Per-device threshold + daily stats present.

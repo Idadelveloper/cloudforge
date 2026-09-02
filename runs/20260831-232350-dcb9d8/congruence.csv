@@ -1,0 +1,7 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,S3 bucket for images,True,True,True
+2,DynamoDB table for album metadata,True,True,True
+3,POST endpoint creating an album,True,True,True
+4,Presigned upload flow for images,True,True,True
+5,GET endpoint listing images in an album,True,True,True
+6,DELETE endpoints for images and albums,True,True,True

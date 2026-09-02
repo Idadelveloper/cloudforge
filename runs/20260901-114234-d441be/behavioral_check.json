@@ -1,0 +1,35 @@
+{
+  "run_id": "20260901-114234-d441be",
+  "scenario": "c6-idempotency",
+  "checked_at": "2026-09-01T21:53:28.894136+00:00",
+  "localstack_url": "http://localhost:4566",
+  "procedure": "operator-directed batch pass per problems-log P19",
+  "checks": [
+    {
+      "check": "create customer",
+      "passed": true,
+      "detail": "{'customer_id': '0859fb235acc467c86dc3be9cd6f30e5', 'email': 'ada@example.com', 'name': 'Ada', 'points_balance': 0, 'lifetime_points': 0, 'tier': 'standard', 'created_at': '2026-09-01T21:53:22Z', 'updated_at': '2026-09-01T21:53:22Z'}"
+    },
+    {
+      "check": "duplicate K1 not re-queued as new",
+      "passed": true,
+      "detail": "202/200 {'status': 'duplicate', 'purchase': {'transaction_id': None, 'expires_at': 1790891602, 'points_awarded': None, 'idempotency_key': 'K1', 'request_fingerprint': 'f82d201fb5d092a2ea8eb5c14c8ea66861f2e052d6c1cd39ced483f1021e118b', 'created_at': '2026-09-01T21:53:22Z', 'customer_id': '0859fb235ac"
+    },
+    {
+      "check": "balance 150 once, not 300 (dedup)",
+      "passed": true,
+      "detail": "{'customer_id': '0859fb235acc467c86dc3be9cd6f30e5', 'points_balance': 150, 'lifetime_points': 150, 'tier': 'standard', 'updated_at': '2026-09-01T21:53:22Z'}"
+    },
+    {
+      "check": "balance 1050 after K2",
+      "passed": true,
+      "detail": "{'customer_id': '0859fb235acc467c86dc3be9cd6f30e5', 'points_balance': 1050, 'lifetime_points': 1050, 'tier': 'gold', 'updated_at': '2026-09-01T21:53:25Z'}"
+    },
+    {
+      "check": "gold tier + SNS on crossing 1000",
+      "passed": true,
+      "detail": "tier=gold msgs=1"
+    }
+  ],
+  "all_passed": true
+}

@@ -1,0 +1,7 @@
+run_id: 20260901-093531-c653a5
+benchmark: C1-orders
+app_coverage: 6/6
+iac_coverage: 6/6
+joint_congruence: 6/6
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Validate-failed (quoting trap #1, worker embed main.tf:413). Checklist resources in valid blocks; no worker item on checklist.

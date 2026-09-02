@@ -1,0 +1,7 @@
+run_id: 20260901-094344-60fa12
+benchmark: C2-jobs
+app_coverage: 7/7
+iac_coverage: 6/7
+joint_congruence: 6/7
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: DIVERGENCE: item 'Lambda worker consuming the queue' App yes / IaC no / Joint no - complete app/worker.py but zero aws_lambda_function in TF (truncation-linked, queue has no consumer). Other 6 items congruent. Also failed flake8 (E211). The campaign's one true cross-artifact incongruence.

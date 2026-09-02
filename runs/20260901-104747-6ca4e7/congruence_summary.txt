@@ -1,0 +1,7 @@
+run_id: 20260901-104747-6ca4e7
+benchmark: C4-blog
+app_coverage: 7/7
+iac_coverage: 7/7
+joint_congruence: 7/7
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Baseline win with record-tying 18 skips - 'success by exemption' exhibit. Probe 13/13.

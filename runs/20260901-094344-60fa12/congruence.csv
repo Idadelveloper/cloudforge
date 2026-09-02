@@ -1,0 +1,8 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,SQS queue for submitted jobs,True,True,True
+2,Lambda worker consuming the queue,True,False,False
+3,DynamoDB table for job status and results,True,True,True
+4,Dead-letter queue for failed jobs,True,True,True
+5,POST endpoint submitting a job,True,True,True
+6,GET endpoint polling job status,True,True,True
+7,GET endpoint fetching results,True,True,True

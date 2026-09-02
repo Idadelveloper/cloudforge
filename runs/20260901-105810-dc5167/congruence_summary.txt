@@ -1,0 +1,7 @@
+run_id: 20260901-105810-dc5167
+benchmark: C4-blog
+app_coverage: 7/7
+iac_coverage: 7/7
+joint_congruence: 7/7
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: First dual-side repair: flake8 fixed honestly + Checkov waivered (11->13 skips). Probe 13/13.

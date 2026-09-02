@@ -1,0 +1,7 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,Versioned S3 bucket for documents,True,True,True
+2,DynamoDB table indexing document metadata,True,True,True
+3,Upload flow creating new versions,True,True,True
+4,GET endpoint listing a document's versions,True,True,True
+5,Search endpoint filtering by tag,True,True,True
+6,Presigned download of a specific version,True,True,True

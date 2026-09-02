@@ -1,0 +1,7 @@
+run_id: 20260901-002000-f49261
+benchmark: M5-expenses
+app_coverage: 5/5
+iac_coverage: 5/5
+joint_congruence: 5/5
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Statics-failed (own pytest 5/30, functional). Congruence intact per Rule A. First app-side failure of campaign.

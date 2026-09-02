@@ -1,0 +1,7 @@
+run_id: 20260901-113319-17d6d2
+benchmark: C6-loyalty
+app_coverage: 7/7
+iac_coverage: 7/7
+joint_congruence: 7/7
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Validate-failed (quoting trap #3, accrual worker main.tf:755). Dedicated idempotency table + key-lookup route; no worker item on checklist.

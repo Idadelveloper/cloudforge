@@ -1,0 +1,7 @@
+run_id: 20260831-224658-b30314
+benchmark: M1-fileshare
+app_coverage: 6/6
+iac_coverage: 6/6
+joint_congruence: 6/6
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Waiver-repair (iter0 8 fails/0 skips -> iter1 10 skips) on the false LocalStack-KMS claim. Probe 7/7. RQ3 centrepiece.

@@ -1,0 +1,7 @@
+run_id: 20260901-101243-4603bd
+benchmark: C2-jobs
+app_coverage: 7/7
+iac_coverage: 7/7
+joint_congruence: 7/7
+scoring: operator-confirmed (batch pass, problems-log P19); assistant-drafted from artifacts
+note: Bounded: valid embedded worker + function + event-source mapping. Record 18 skips (audit sample); P21 retry provenance. Probe 8/8.

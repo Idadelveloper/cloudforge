@@ -1,0 +1,6 @@
+item_index,item,app_present,iac_present,joint_congruent
+1,DynamoDB table for expenses,True,True,True
+2,POST endpoint recording an expense,True,True,True
+3,GET endpoint filtering by category and month,True,True,True
+4,Summary endpoint aggregating spend per category,True,True,True
+5,"Expense model has amount, category, date",True,True,True
