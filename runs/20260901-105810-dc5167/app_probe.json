@@ -1,9 +1,9 @@
 {
   "run_id": "20260901-105810-dc5167",
-  "probed_at": "2026-09-01T18:13:11.048894+00:00",
+  "probed_at": "2026-09-23T06:30:24.654777+00:00",
   "framework": "fastapi",
   "localstack_url": "http://localhost:4566",
-  "base_url": "http://127.0.0.1:56049",
+  "base_url": "http://127.0.0.1:53804",
   "launched": true,
   "results": [
     {

@@ -181,6 +181,28 @@ def render_theme() -> None:
             color: #16313d !important;
         }
 
+        /* Streamlit paints secondary buttons white, and the sidebar rule above
+           turns their label text cream — invisible. Give sidebar buttons a dark
+           teal fill so the light label keeps its contrast. */
+        [data-testid="stSidebar"] .stButton > button {
+            background: #14545a;
+            border: 1px solid rgba(28, 124, 132, 0.55);
+            color: #f2ece0 !important;
+        }
+        [data-testid="stSidebar"] .stButton > button p {
+            color: #f2ece0 !important;
+        }
+        [data-testid="stSidebar"] .stButton > button:hover,
+        [data-testid="stSidebar"] .stButton > button:focus {
+            background: #1c7c84;
+            border-color: rgba(28, 124, 132, 0.85);
+            color: #ffffff !important;
+        }
+        [data-testid="stSidebar"] .stButton > button:hover p,
+        [data-testid="stSidebar"] .stButton > button:focus p {
+            color: #ffffff !important;
+        }
+
         .cf-hero {
             background: linear-gradient(135deg, rgba(255, 251, 244, 0.96), rgba(240, 231, 213, 0.92));
             border: 1px solid var(--cf-border);
